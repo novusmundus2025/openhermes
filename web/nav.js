@@ -1,6 +1,19 @@
 (() => {
   const rowId = 'openhermes-projects-row';
   function install() {
+    const projectsRow = document.getElementById(rowId);
+    if (projectsRow && !document.getElementById('openhermes-browser-row')) {
+      const browserRow = projectsRow.cloneNode(true);
+      browserRow.id = 'openhermes-browser-row';
+      browserRow.dataset.id = 'openhermes-browser';
+      const browserLink = browserRow.querySelector('a');
+      browserLink.id = 'openhermes-browser-link';
+      browserLink.href = '/guided-browser/';
+      browserLink.setAttribute('aria-label', 'Guided Browser');
+      const text = document.createTreeWalker(browserLink, NodeFilter.SHOW_TEXT);
+      while (text.nextNode()) if (text.currentNode.textContent.trim() === 'Projects') text.currentNode.textContent = 'Guided Browser';
+      projectsRow.insertAdjacentElement('afterend', browserRow);
+    }
     const anchor = document.getElementById('sidebar-notes-button');
     if (!anchor) return;
     const notesRow = anchor.closest('[data-id="notes"]') || anchor.parentElement;

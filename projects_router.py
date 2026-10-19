@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response, JSONResponse
 from open_webui.utils.auth import get_verified_user
 from open_webui.models.users import Users
 
@@ -19,17 +19,36 @@ def config():
     return json.loads(Path('/app/backend/data/openhermes-bridge.json').read_text())
 
 
-async def forward(user, body):
+async def forward(user, body, endpoint='projects'):
     settings = config()
     identity = {k: getattr(user, k, '') for k in ('id', 'name', 'email')}
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=240)) as session:
-        async with session.post(settings['url'] + '/projects',
+        async with session.post(settings['url'] + '/' + endpoint,
                 headers={'Authorization': 'Bearer ' + settings['key']},
                 json={'user': identity, 'body': body}) as response:
             data = await response.json()
             if response.status != 200:
                 raise HTTPException(response.status, data.get('error', 'Project request failed'))
             return data
+
+
+@router.post('/api/openhermes/browser/action')
+async def browser_action(request: Request, user=Depends(get_verified_user)):
+    if user.role not in ('admin', 'user'):
+        raise HTTPException(403, 'Account approval is required')
+    if int(request.headers.get('content-length', '0')) > 16384:
+        raise HTTPException(413, 'Browser request too large')
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, 'Invalid browser request')
+    return JSONResponse(await forward(user, body, 'browser'), headers={'Cache-Control': 'no-store', 'Pragma': 'no-cache'})
+
+
+@router.get('/guided-browser/')
+async def guided_page():
+    return FileResponse(ROOT / 'web' / 'guided.html', headers={'Cache-Control': 'no-store',
+        'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'"})
 
 
 @router.post('/api/openhermes/projects/action')
@@ -83,6 +102,6 @@ async def projects_page():
 
 @router.get('/projects/{asset}')
 async def project_asset(asset: str):
-    if asset not in ('app.js', 'style.css', 'nav.js'):
+    if asset not in ('app.js', 'style.css', 'nav.js', 'guided.js', 'guided.css'):
         raise HTTPException(404)
     return FileResponse(ROOT / 'web' / asset, headers={'Cache-Control': 'no-cache'})

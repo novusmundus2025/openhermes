@@ -22,6 +22,11 @@
    Contribution imports are off until devices are explicitly linked.
 10. Plans/checkpoints live in `.hermes-project/`, with root `AGENTS.md` for discovery.
     Agent tasks attempt local Git checkpoint commits. Remote pushes are separate.
+11. The manual Guided Browser at `/guided-browser/` uses native Hermes tools through
+    `/api/openhermes/browser/action`. Open WebUI injects the approved user's identity;
+    sessions, screenshots and controls are owner-scoped. It needs no separate
+    browser:8077, broker:8088 or public VNC service. Autopilot and secure graphical
+    login takeover are not implemented by this first version.
 
 ## Scripts in this repository
 

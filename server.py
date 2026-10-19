@@ -94,6 +94,8 @@ class Handler(BaseHTTPRequestHandler):
         self.respond(404, {"error": "Not found"})
 
     def do_POST(self):
+        if self.path == '/browser':
+            return self.browser()
         if self.path == '/projects':
             return self.projects()
         match = re.fullmatch(r'/provider/(owui-[0-9a-f]{32})/v1/chat/completions', self.path)
@@ -243,6 +245,25 @@ class Handler(BaseHTTPRequestHandler):
         except (URLError, TimeoutError, OSError, ValueError):
             self.respond(503, {'error': 'Model provider unavailable'})
 
+    def browser(self):
+        from projects import ProjectError
+        if not hmac.compare_digest(self.headers.get('Authorization', ''), 'Bearer ' + self.server.settings['bridge_key']):
+            return self.respond(401, {'error': 'Unauthorized'})
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if not 0 < length <= 16384:
+                return self.respond(413, {'error': 'Browser request too large'})
+            request = json.loads(self.rfile.read(length))
+            if not isinstance(request, dict) or not isinstance(request.get('user'), dict) or not isinstance(request.get('body'), dict):
+                raise ValueError()
+            return self.respond(200, self.server.browser.dispatch(request['user'], request['body']))
+        except ProjectError as exc:
+            return self.respond(exc.status, {'error': str(exc)})
+        except (ValueError, KeyError, TypeError):
+            return self.respond(400, {'error': 'Invalid browser request'})
+        except Exception:
+            return self.respond(503, {'error': 'Browser service unavailable'})
+
     def projects(self):
         from projects import ProjectError
         if not hmac.compare_digest(self.headers.get('Authorization', ''), 'Bearer ' + self.server.settings['bridge_key']):
@@ -279,6 +300,8 @@ def main():
     server.profile_locks = defaultdict(threading.Lock)
     from projects import ProjectService
     server.projects = ProjectService(connect, ensure_user, settings, STATE)
+    from guided_browser import BrowserService
+    server.browser = BrowserService(ensure_user, STATE)
     from contributions import start_worker
     start_worker(connect, settings.get('contribution_source'))
     server.serve_forever()

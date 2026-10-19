@@ -1,5 +1,19 @@
 # OpenHermes
 
+The manual Guided Browser is at `/guided-browser/` (also linked in the Open WebUI
+sidebar after refresh). It uses authenticated owner-scoped sessions and native
+Hermes browser tools, with screenshots, current element references, click/fill,
+back/scroll, and explicit stop. Each session has a separate Hermes runtime and
+sandbox; it does not attach to an existing regular-chat browser or its cookies.
+There are four guided slots and a 15-minute inactivity expiry. Stop removes that
+session's sandbox and private runtime. Backend restarts close child browser workers;
+runtime-directory recovery after an abnormal host crash remains operator-managed.
+No AI autopilot, reusable workflow recording or noVNC takeover is included yet.
+Public HTTP(S) URLs are validated; internal/LAN URLs and arbitrary JavaScript/shell
+commands are not accepted. This URL validation is not a network-level egress firewall.
+Typed input is not stored in the bridge DB or chat; native runtime cleanup still
+matters for website cookies/history. Do not claim secure browser-login handoff.
+
 For the complete multi-user setup sequence and runnable deployment scripts, see
 [deploy/SETUP.md](deploy/SETUP.md). Existing installations should use its update
 section rather than generating new secrets.

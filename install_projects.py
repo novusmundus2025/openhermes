@@ -8,7 +8,7 @@ DEST = '/app/backend/data/openhermes-projects'
 
 def main():
     subprocess.run(['docker', 'exec', 'open-webui', 'mkdir', '-p', DEST + '/web'], check=True)
-    for name in ('projects_router.py', 'web/index.html', 'web/app.js', 'web/style.css', 'web/nav.js'):
+    for name in ('projects_router.py', 'web/index.html', 'web/app.js', 'web/style.css', 'web/nav.js', 'web/guided.html', 'web/guided.js', 'web/guided.css'):
         subprocess.run(['docker', 'cp', str(ROOT / name), 'open-webui:' + DEST + '/' + name], check=True)
     code = '''from pathlib import Path
 import shutil
