@@ -15,3 +15,14 @@ body{background:#080b0c}.sidebar{background:linear-gradient(180deg,#141b1e,#090e
 #file-tab #close-file{flex:none;font-size:18px;line-height:1;padding:3px 7px;margin:0 0 0 5px;color:#a8c8c4;border-radius:5px}#file-tab #close-file:hover{background:#354b4d;color:#fff}#file-tab{max-width:100%}#close-file-dialog p{overflow-wrap:anywhere}
 
 .project-row{display:flex;align-items:center;gap:2px}.project-row .project-link{flex:1;min-width:0}.project-delete{flex-shrink:0;border:0;padding:6px;color:#b5d0cd;font-size:18px}.project-delete:hover{color:#ffb5a7;background:#321f27}
+
+/* Keep project actions inside one aligned navigation row. */
+.project-row{position:relative;display:flex;align-items:stretch;width:100%;margin:3px 0;border-radius:8px}
+.project-row .project-link{width:100%;margin:0;padding-right:36px;min-height:42px}
+.project-row .project-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.project-row .project-delete{position:absolute;right:6px;top:50%;transform:translateY(-50%);display:grid;place-items:center;width:26px;height:28px;padding:0;border:0;border-radius:5px;background:transparent;color:#9fbab7;font-size:19px;line-height:1;opacity:0;pointer-events:none}
+.project-row:hover .project-delete,.project-row:focus-within .project-delete{opacity:1;pointer-events:auto}
+.project-row .project-delete:hover{background:#66333b;color:#ffd6d6}
+.project-row .project-delete:focus-visible{opacity:1;pointer-events:auto;outline:2px solid #00d2be;outline-offset:1px}
+@media(hover:none){.project-row .project-delete{opacity:1;pointer-events:auto}}
+@media(max-width:900px){.project-row .project-link{padding-right:20px}.project-row .project-delete{right:0;width:20px}}
