@@ -13,6 +13,17 @@ from pydantic import BaseModel, Field
 import aiohttp
 
 
+def starting_url(message):
+    # Prefer a Markdown link's destination; do not treat its brackets/emphasis as URL text.
+    link=re.search(r'\[[^\]]*\]\((https?://[^\s)]+)\)',message)
+    if link:return link[1]
+    url=re.search(r'https?://[^\s<>\[\]`*]+',message)
+    if url:return url[0].rstrip(').,')
+    if re.search(r'\b(?:open|visit|use|search|on|using)\s+(?:(?:with|on)\s+)?google\b|\bgoogle\s+(?:search|for|latest)\b',message,re.I):
+        return 'https://www.google.com/'
+    return None
+
+
 class Pipe:
     class Valves(BaseModel):
         BROWSER_URL: str = Field(default='http://172.17.0.1:8643', description='OpenHermes private bridge. This replaces the old browser:8077 service.')
@@ -95,10 +106,9 @@ class Pipe:
             if re.match(r'/?(type|password|otp|passcode)\b',command):
                 yield self._message(data,'Fill fields in human control in the browser workspace. Do not put credentials in chat.')
                 return
-            url_match=re.search(r'https?://[^\s<>]+',message)
-            target=url_match[0].rstrip(').,') if url_match else None
+            target=starting_url(message)
             if not sid:
-                if not target:raise ValueError('Include a public website URL to begin')
+                if not target:raise ValueError('Include a public website URL, or ask to open Google, to begin')
                 data=await call('start');sid=data['session_id']
             manual_open=command.startswith('/open ') or bool(re.fullmatch(r'https?://\S+',message))
             if target:

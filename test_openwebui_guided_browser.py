@@ -1,10 +1,19 @@
 import asyncio
 import unittest
 from unittest.mock import patch
-from openwebui_guided_browser import Pipe
+from openwebui_guided_browser import Pipe, starting_url
 
 
 class FunctionTests(unittest.TestCase):
+    def test_google_task_can_start_without_literal_url(self):
+        for message in ('Open Google and search for the latest AI news.', 'Check on Google latest AI news top 5', 'Search Google for AI news'):
+            self.assertEqual(starting_url(message),'https://www.google.com/')
+        self.assertIsNone(starting_url('Summarize my private document'))
+
+    def test_explicit_and_markdown_urls_take_precedence(self):
+        self.assertEqual(starting_url('Open [**https://www.cardmarket.com**](https://www.cardmarket.com).'),'https://www.cardmarket.com')
+        self.assertEqual(starting_url('Use Google later; first open https://example.com.'),'https://example.com')
+
     def test_background_function_calls_have_no_browser_side_effects(self):
         async def check():
             pipe=Pipe()
