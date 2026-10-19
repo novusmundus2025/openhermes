@@ -5,6 +5,11 @@ from openwebui_guided_browser import Pipe, starting_url
 
 
 class FunctionTests(unittest.TestCase):
+    def test_browser_reference_is_in_link_not_visible_protocol_comment(self):
+        result=Pipe()._message({'view':3,'session_id':'abc123'},'Ready')
+        self.assertIn('/guided-browser/#view=3&sid=abc123',result)
+        self.assertNotIn('<!--',result)
+
     def test_google_task_can_start_without_literal_url(self):
         for message in ('Open Google and search for the latest AI news.', 'Check on Google latest AI news top 5', 'Search Google for AI news'):
             self.assertEqual(starting_url(message),'https://www.google.com/')

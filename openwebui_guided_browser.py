@@ -36,7 +36,10 @@ class Pipe:
         self.valves=self.Valves()
 
     def _message(self,data,summary,show_elements=False):
-        text=summary+'\n\n[Open live browser / human control]('+self.valves.WORKSPACE_URL+')'
+        workspace=self.valves.WORKSPACE_URL
+        if data.get('session_id'):
+            workspace=workspace.split('#',1)[0]+'#view='+str(data.get('view',0))+'&sid='+data['session_id']
+        text=summary+'\n\n[Open live browser / human control]('+workspace+')'
         if show_elements and data.get('control','human')=='human':
             # Do not include login-page snapshots or filled field values in chat.
             snapshot=str(data.get('snapshot',''))
@@ -49,8 +52,6 @@ class Pipe:
                         line=line[:match.end()] if match else '[input omitted]'
                     lines.append(line)
                 if lines:text+='\n\n```text\n'+'\n'.join(lines[:self.valves.LEGEND_MAX])[:4000]+'\n```'
-        if data.get('session_id'):
-            text+='\n\n<!-- openhermes-browser view='+str(data.get('view',0))+' sid='+data['session_id']+' -->'
         return text
 
     async def pipe(self,body:dict,__user__:dict,__task__=None,__event_emitter__=None):
@@ -97,7 +98,7 @@ class Pipe:
                 if not sid:raise ValueError('Open a public URL first')
                 if manual_click:
                     previous=next((m.get('content','') for m in reversed(messages) if m.get('role')=='assistant'),'')
-                    match=re.search(r'<!-- openhermes-browser view=(\d+) sid=([a-f0-9]+) -->',previous if isinstance(previous,str) else '')
+                    match=re.search(r'(?:#view=|<!-- openhermes-browser view=)(\d+)(?:&sid=| sid=)([a-f0-9]+)',previous if isinstance(previous,str) else '')
                     if not match or match[2]!=sid:raise ValueError('Use /refresh to obtain a current element view before clicking')
                     data=await call('click',session_id=sid,view=int(match[1]),ref=manual_click[1])
                 else:data=await call('refresh',session_id=sid)

@@ -82,6 +82,18 @@ class AutomationTests(unittest.TestCase):
 
 
 class PlannerBoundaryTests(unittest.TestCase):
+    def test_provider_batch_uses_first_action_only(self):
+        import io,json,time
+        engine=BrowserAutomation(None,{'model_upstream':'https://provider.example/v1'})
+        calls=[{'function':{'name':'browser_step','arguments':json.dumps(plan)}} for plan in
+               ({'action':'type','ref':'e1','text':'AI news'},{'action':'click','ref':'e2'})]
+        response={'choices':[{'message':{'tool_calls':calls}}]}
+        with patch('browser_automation.urlopen',return_value=io.BytesIO(json.dumps(response).encode())) as send:
+            plan=engine.plan({'id':'alice'},{'started':time.monotonic(),'cancel':threading.Event(),'goal':'Find news','history':[]},
+                {'url':'https://www.google.com/','snapshot':'- searchbox "Search" [ref=e1]\n- button "Search" [ref=e2]'})
+        self.assertEqual(plan,{'action':'type','ref':'e1','text':'AI news'})
+        self.assertFalse(json.loads(send.call_args[0][0].data)['parallel_tool_calls'])
+
     def test_planner_supports_upstream_without_key_and_includes_title(self):
         import io,json,time
         engine=BrowserAutomation(None,{'model_upstream':'https://provider.example/v1'})
