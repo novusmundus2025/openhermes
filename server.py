@@ -155,7 +155,7 @@ class Handler(BaseHTTPRequestHandler):
                                   self.server.settings["upstream_key"].encode(),
                                   profile.encode(), hashlib.sha256).hexdigest(),
                               "Content-Type": "application/json"})
-            with urlopen(req, timeout=600) as response:
+            with urlopen(req, timeout=880) as response:
                 self.send_response(response.status)
                 self.send_header("Content-Type", response.headers.get("Content-Type", "application/json"))
                 self.send_header("Connection", "close")
@@ -210,7 +210,7 @@ class Handler(BaseHTTPRequestHandler):
             def send_model(payload):
                 req = Request(self.server.settings['model_upstream'].rstrip('/') + '/chat/completions',
                               data=json.dumps(payload).encode(), headers=headers)
-                with urlopen(req, timeout=120) as response:
+                with urlopen(req, timeout=620) as response:
                     result = json.load(response)
                 if tracker:
                     tracker.add_provider_usage(result.get('usage'))

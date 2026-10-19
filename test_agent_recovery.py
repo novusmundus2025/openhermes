@@ -17,7 +17,7 @@ class RecoveryTests(unittest.TestCase):
         emitted=[]
         code=run([sys.executable,'-c','raise SystemExit(124)'],'test',emitted.append)
         self.assertEqual(code,124)
-        self.assertIn('300-second',emitted[-1]['text'])
+        self.assertIn('600-second',emitted[-1]['text'])
         self.assertIn('No tool results',emitted[-1]['text'])
 
     def test_timeout_warns_about_partial_saved_edits(self):

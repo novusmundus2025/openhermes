@@ -163,7 +163,7 @@ def run(command, prompt, emit, workspace_root=None):
             edits = sum(1 for e in events if e.get('type')=='tool_result' and e.get('name') in ('write_file','patch')
                         and not e.get('is_error') and (payload(e).get('verified') or payload(e).get('success')))
             tools = sum(1 for e in events if e.get('type')=='tool_result')
-            text = 'Hermes exceeded the 300-second execution limit before returning a final answer. '
+            text = 'Hermes exceeded the 600-second execution limit before returning a final answer. '
             text += (str(edits)+' file edit(s) reported success before timeout; changes may be incomplete. Review the files and Git diff before continuing.' if edits
                      else 'No successful file edits were recorded.' if tools else 'No tool results were received; no file changes are confirmed.')
             text += ' If this repeats, check inference-provider availability and latency.'

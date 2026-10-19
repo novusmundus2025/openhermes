@@ -38,7 +38,7 @@ File and job APIs validate the authenticated owner on every request. File access
 rejects traversal and symlinks; editor saves detect changes made since opening.
 The editor supports regular UTF-8 files up to 1 MB and hides `.git` and `.env` files.
 The command console runs finite commands (60 seconds), not an interactive PTY.
-Agent tasks have a 240-second budget and 16 tool iterations. Preview currently
+Agent tasks have a 600-second budget and 16 tool iterations. Preview currently
 serves static files; an authenticated reverse proxy for long-running app servers
 is not included. Preview tickets expire after 10 minutes; refresh to renew them.
 
@@ -171,7 +171,7 @@ stale-write or exact-match patch errors can trigger one additional Hermes turn i
 that same chat. Recovery must produce a full-file read, a verified file-tool edit,
 and a read-back for each blocked path. Otherwise the job stays failed. No guard
 is disabled and no terminal write substitutes for a guarded file edit. The overall
-watchdog allows up to 610 seconds for two bounded attempts; Stop still stops the
+watchdog allows up to 630 seconds across both attempts; Stop still stops the
 project container. Partial/paginated reads are conservatively unverified by this
 recovery checker, so large files may require manual follow-up. Tests run with
 `python3 -m unittest test_agent_recovery`.
@@ -198,3 +198,10 @@ browser_snapshot, browser_click and related tools. It does not disable browsing.
 A regular per-user chat was verified to execute browser_navigate successfully and
 return Example Domain. Test browsers from the earlier backend were closed before
 switching to avoid Chromium profile locks. Human login handoff remains unconnected.
+
+Timeout policy: inference assignments are capped at 600 seconds after assignment;
+worker no-model-progress watchdog remains 300 seconds. Queued inference requests
+are governed separately. Projects runs a 600-second native attempt with a 630-second
+overall watchdog including any edit recovery. A provider call may wait 620 seconds
+for a terminal upstream response. This bridge receives buffered provider responses
+and cannot itself measure token inactivity; the inference worker owns that check.

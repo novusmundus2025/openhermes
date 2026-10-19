@@ -240,7 +240,7 @@ class ProjectService:
                          key_env='OPENHERMES_MODEL_KEY', streaming=False)
             model.pop('api_key', None)
             config = {'model': model, 'terminal': {'backend': 'local', 'cwd': '/workspace'},
-                      'agent': {'max_turns': 16, 'run_budget_seconds': 240}, 'display': {'streaming': True},
+                      'agent': {'max_turns': 16, 'run_budget_seconds': 600}, 'display': {'streaming': True},
                       'platform_toolsets': {'cli': ['terminal', 'file']}}
             private_write(home, 'config.yaml', yaml.safe_dump(config))
             private_write(home, '.env', 'OPENHERMES_MODEL_KEY=' + model_key + '\n')
@@ -296,7 +296,7 @@ class ProjectService:
                 from usage import Tracker
                 tracker = Tracker(self.connect, project['user_id'], False, self.settings.get('credits'), len(prompt))
                 command = ['docker', 'exec', '-i', '--workdir', '/workspace', container,
-                           'timeout', '--signal=TERM', '--kill-after=5', '300', PYTHON, '-I', '-c',
+                           'timeout', '--signal=TERM', '--kill-after=5', '600', PYTHON, '-I', '-c',
                            "import sys,runpy;sys.path.insert(0,'" + SOURCE + "');import hermes_bootstrap;import hermes_cli.stream_json as _sj;_sj._TOOL_OUTPUT_CAP=65536;runpy.run_module('hermes_cli.main',run_name='__main__')",
                            'chat', '--cli', '--query-file', '-', '--oneshot', '--format', 'stream-json',
                            '--in', '/workspace', '--continue', ('project-' + project['id'] if project.get('chat_id', '').startswith('legacy-') else 'chat-' + project['chat_id']), '--create-if-missing',
@@ -322,7 +322,7 @@ class ProjectService:
                 def expire():
                     expired.set()
                     self.run(['docker', 'stop', '--time', '3', container], timeout=15)
-                timer = threading.Timer(610 if kind == 'agent' else 70, expire)
+                timer = threading.Timer(630 if kind == 'agent' else 70, expire)
                 timer.daemon = True
                 timer.start()
                 if input_data is not None:
