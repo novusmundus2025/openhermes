@@ -39,9 +39,10 @@ Back up the SQLite database, user profile/project directories, project runtime s
 and Open WebUI data consistently. Protect secret backups separately. Nothing in
 this repository migrates live data or changes the current deployment automatically.
 
-Projects soft-deletion hides a project and conversations but retains disk files,
-Git, metadata and containers for recovery. It blocks queued/running tasks. There
-is no Trash UI or disk reclamation yet.
+Project deletion removes local project files, Git, container, runtime and stored
+conversations after confirmation. Shared account profiles and remote repositories
+are preserved. It blocks queued/running tasks; no remote Git commands run.
+Unpushed work is lost. Existing soft-deleted projects are not automatically purged.
 
 Run the 48 backend checks on Linux:
 

@@ -15,6 +15,7 @@ import time
 import uuid
 import shlex
 import sys
+import shutil
 from urllib.parse import urlparse
 
 HERMES = '/home/a/.local/bin/hermes'
@@ -173,6 +174,44 @@ class ProjectService:
 
     def run(self, args, **kwargs):
         return subprocess.run(args, capture_output=True, text=True, timeout=kwargs.pop('timeout', 30), **kwargs)
+
+    def cleanup_project(self, project):
+        """Remove only this managed project's local resources; never contact Git remotes."""
+        pid, profile, slug = project['id'], project['profile'], project['slug']
+        if not re.fullmatch(r'[a-f0-9]{32}', pid) or not re.fullmatch(r'owui-[a-f0-9]{32}', profile):
+            raise ProjectError('Invalid managed project identity', 409)
+        if not re.fullmatch(r'[a-z0-9-]+', slug):
+            raise ProjectError('Invalid managed project directory', 409)
+        expected = Path.home().resolve() / '.hermes' / 'profiles' / profile / 'workspace' / 'projects' / slug
+        root = Path(project['root'])
+        runtime = self.state.absolute() / 'project-runtime' / pid
+        # Check every computed path before any irreversible operation.
+        if root != expected or root.resolve() != expected or runtime.resolve() != runtime:
+            raise ProjectError('Project cleanup path is unsafe', 409)
+        if not shutil.rmtree.avoids_symlink_attacks:
+            raise ProjectError('Safe project cleanup requires Linux', 503)
+        for path in (root, runtime):
+            if path.is_symlink() or (path.exists() and not path.is_dir()):
+                raise ProjectError('Project cleanup path is unsafe', 409)
+        container = 'openhermes-project-' + pid
+        with self.container_lock:
+            inspected = self.run(['docker', 'inspect', container])
+            if inspected.returncode == 0:
+                info = json.loads(inspected.stdout)[0]
+                if info['Config'].get('Labels', {}).get('org.openhermes.project') != pid:
+                    raise ProjectError('Project container identity mismatch', 409)
+                removed = self.run(['docker', 'rm', '--force', container], timeout=30)
+                if removed.returncode:
+                    raise ProjectError('Could not remove project container; deletion incomplete', 503)
+            elif not any(message in inspected.stderr for message in ('No such object', 'No such container')):
+                raise ProjectError('Could not inspect project container; deletion stopped', 503)
+            for path in (root, runtime):
+                if path.exists():
+                    parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    try:
+                        shutil.rmtree(path.name, dir_fd=parent)
+                    finally:
+                        os.close(parent)
 
     def create(self, user, profile, name, repository=None):
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 60 or any(ord(c) < 32 for c in name):
@@ -411,8 +450,11 @@ class ProjectService:
                 db.execute('BEGIN IMMEDIATE')
                 if db.execute("SELECT 1 FROM project_jobs WHERE project_id=? AND state IN ('queued','running')", (project['id'],)).fetchone():
                     raise ProjectError('Stop the running task before deleting this project', 409)
+                self.cleanup_project(project)
+                db.execute('DELETE FROM project_jobs WHERE project_id=?', (project['id'],))
+                db.execute('DELETE FROM project_chats WHERE project_id=?', (project['id'],))
                 db.execute('INSERT INTO deleted_projects VALUES (?,?)', (project['id'], int(time.time())))
-            return {'deleted': True}
+            return {'deleted': True, 'local_resources_removed': True, 'remote_git_untouched': True}
         if action == 'chats':
             with self.connect() as db:
                 db.row_factory = sqlite3.Row

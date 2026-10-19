@@ -42,7 +42,9 @@ class ProjectBoundaryTests(unittest.TestCase):
             self.service.dispatch({'id':'alice'}, base)
         with self.connect() as db:
             db.execute("UPDATE project_jobs SET state='completed'")
-        self.assertTrue(self.service.dispatch({'id':'alice'}, base)['deleted'])
+        with patch.object(self.service, 'cleanup_project') as cleanup:
+            self.assertTrue(self.service.dispatch({'id':'alice'}, base)['deleted'])
+            cleanup.assert_called_once()
         self.assertEqual(self.service.dispatch({'id':'alice'}, {'action':'list'})['projects'], [])
         with self.assertRaises(ProjectError):
             self.service.dispatch({'id':'alice'}, {'action':'tree','project_id':'project-a'})
@@ -156,3 +158,35 @@ class ProjectBoundaryTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ProjectCleanupTests(unittest.TestCase):
+    def test_local_cleanup_preserves_remote_and_other_profile_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home=Path(temporary);pid='a'*32;profile='owui-'+('b'*32)
+            root=home/'.hermes/profiles'/profile/'workspace/projects/example'
+            root.mkdir(parents=True);(root/'.git').mkdir();(root/'.git/config').write_text('remote untouched')
+            other=root.parent/'other';other.mkdir();(other/'keep').write_text('keep')
+            state=home/'state';runtime=state/'project-runtime'/pid;runtime.mkdir(parents=True)
+            shared=home/'shared';shared.mkdir();(shared/'keep').write_text('keep')
+            (runtime/'installs').symlink_to(shared,target_is_directory=True)
+            service=object.__new__(ProjectService);service.state=state
+            import threading
+            service.container_lock=threading.Lock()
+            service.run=lambda args,**kw: subprocess.CompletedProcess(args,1,'','No such container')
+            project={'id':pid,'profile':profile,'slug':'example','root':str(root)}
+            with patch('projects.Path.home',return_value=home):
+                service.run=lambda args,**kw: subprocess.CompletedProcess(args,0,'[{"Config":{"Labels":{"org.openhermes.project":"someone-else"}}}]','')
+                with self.assertRaises(ProjectError):service.cleanup_project(project)
+                self.assertTrue(root.exists())
+                service.run=lambda args,**kw: subprocess.CompletedProcess(args,1,'','daemon unavailable')
+                with self.assertRaises(ProjectError):service.cleanup_project(project)
+                self.assertTrue(root.exists())
+                service.run=lambda args,**kw: subprocess.CompletedProcess(args,1,'','No such container')
+                service.cleanup_project(project)
+                self.assertFalse(root.exists());self.assertFalse(runtime.exists())
+                self.assertEqual((other/'keep').read_text(),'keep')
+                self.assertEqual((shared/'keep').read_text(),'keep')
+                self.assertTrue(root.parents[2].exists())
+                project['root']=str(other)
+                with self.assertRaises(ProjectError):service.cleanup_project(project)

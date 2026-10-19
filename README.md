@@ -205,3 +205,10 @@ are governed separately. Projects runs a 600-second native attempt with a 630-se
 overall watchdog including any edit recovery. A provider call may wait 620 seconds
 for a terminal upstream response. This bridge receives buffered provider responses
 and cannot itself measure token inactivity; the inference worker owns that check.
+
+Project deletion permanently removes only the selected project's server files,
+local Git repository, Docker container, runtime state and stored conversations.
+The user profile and other projects remain. Remote Git repositories are never
+contacted or changed by deletion. Unpushed work is lost; the UI confirms this.
+Queued/running project tasks block deletion. An audit tombstone remains.
+Previously hidden projects are not automatically purged by this change.
