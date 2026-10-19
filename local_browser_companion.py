@@ -7,14 +7,13 @@ No listening port, personal browser profile, account password, or Open WebUI tok
 import argparse
 import base64
 import getpass
+import hashlib
 import ipaddress
 import json
 import os
 from pathlib import Path
 import re
-import shutil
 import socket
-import tempfile
 import time
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -31,8 +30,38 @@ def public_url(value):
     return value
 
 
+CONSENT_REJECT = re.compile(r'^(?:alle ablehnen|alles ablehnen|reject all|reject optional cookies|reject non-essential cookies|decline all|nur notwendige cookies|only necessary cookies|necessary cookies only|tout refuser|odrzuć wszystkie)$', re.I)
+CONSENT_CONTEXT = re.compile(r'cookie|consent|privatsphäre|privacy settings|datenschutz|confidentialité|prywatno', re.I)
+
+
+def reject_cookie_dialog(page):
+    try:
+        return _reject_cookie_dialog(page)
+    except Exception:
+        # A disappearing banner/frame must not fail an otherwise successful page read.
+        return False
+
+
+def _reject_cookie_dialog(page):
+    """Exact reject buttons, inside consent dialogs only. Never accept-all or generic reject."""
+    for frame in page.frames:
+        dialogs = frame.locator('[role="dialog"], [role="alertdialog"], [aria-modal="true"], #onetrust-banner-sdk, #onetrust-consent-sdk, #usercentrics-root')
+        for dialog in dialogs.all():
+            if not dialog.is_visible() or not CONSENT_CONTEXT.search(dialog.inner_text()[:6000]):
+                continue
+            buttons = dialog.get_by_role('button', name=CONSENT_REJECT)
+            visible = [button for button in buttons.all() if button.is_visible()]
+            if len(visible) == 1:
+                visible[0].click(timeout=3000)
+                return True
+    return False
+
+
 class Browser:
-    def __init__(self):
+    def __init__(self, profile_key):
+        if not re.fullmatch(r'[a-f0-9]{64}', profile_key):
+            raise ValueError('Invalid isolated browser profile')
+        self.profile_key = profile_key
         self.context = self.page = self.session = self.root = None
         self.refs = {}
         from playwright.sync_api import sync_playwright
@@ -43,21 +72,18 @@ class Browser:
             self.context.close()
         self.context = self.page = self.session = None
         self.refs = {}
-        if self.root:
-            # Only a tempfile we created, resolved inside our dedicated app directory.
-            base = Path(os.environ.get('LOCALAPPDATA', str(Path.home()/'.local/share'))) / 'OpenHermes' / 'browser-sessions'
-            target = self.root.resolve()
-            if target.parent == base.resolve() and target.name.startswith('session-'):
-                shutil.rmtree(target, ignore_errors=True)
-            self.root = None
+        self.root = None  # Keep this account's dedicated profile, including consent choices.
 
     def start(self, sid):
         self.close()
         if not re.fullmatch(r'[a-f0-9]{32}', sid):
             raise ValueError('Invalid browser session')
-        base = Path(os.environ.get('LOCALAPPDATA', str(Path.home()/'.local/share'))) / 'OpenHermes' / 'browser-sessions'
+        base = Path(os.environ.get('LOCALAPPDATA', str(Path.home()/'.local/share'))) / 'OpenHermes' / 'browser-profiles'
         base.mkdir(parents=True, exist_ok=True)
-        self.root = Path(tempfile.mkdtemp(prefix='session-', dir=base))
+        self.root = base / self.profile_key
+        self.root.mkdir(exist_ok=True)
+        if self.root.is_symlink() or self.root.resolve().parent != base.resolve():
+            raise ValueError('Invalid isolated browser profile path')
         failure = None
         for channel in ('chrome', 'msedge'):
             try:
@@ -117,7 +143,13 @@ class Browser:
         # Refresh takes a new view, preserving a page the human has just navigated.
         self.page.wait_for_timeout(300)
         public_url(self.page.url)
-        return self.frame()
+        dismissed = reject_cookie_dialog(self.page)
+        if dismissed:
+            self.page.wait_for_timeout(200)
+            public_url(self.page.url)
+        result = self.frame()
+        result['consent_dismissed'] = dismissed
+        return result
 
     def frame(self):
         # Fixed DOM extraction: input values/contenteditable text never leave the PC.
@@ -188,9 +220,11 @@ def main():
             return
     else:
         code = getpass.getpass('Pairing code from your Guided Browser page (hidden): ')
-    token = api({'action':'pair','code':code})['token']
+    pairing = api({'action':'pair','code':code})
+    token = pairing['token']
     code = None
-    browser = Browser()
+    profile_key = hashlib.sha256((server+'|'+pairing['profile_id']).encode()).hexdigest()
+    browser = Browser(profile_key)
     print('Connected. Use Guided Browser in Open WebUI. Pause AI before using the dedicated local window. Ctrl+C disconnects.')
     try:
         while True:

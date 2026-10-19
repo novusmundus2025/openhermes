@@ -58,6 +58,14 @@ class LocalBrowserTests(unittest.TestCase):
         with self.assertRaises(ProjectError):
             self.broker.device({'action':'pair','code':code})
 
+    def test_profile_identity_survives_repairing_and_differs_between_users(self):
+        def profile(uid):
+            code=self.broker.user_action(uid,{'action':'local_pair'})['pair_code']
+            return self.broker.device({'action':'pair','code':code})['profile_id']
+        alice=profile('alice')
+        self.assertEqual(alice,profile('alice'))
+        self.assertNotEqual(alice,profile('bob'))
+
     def test_selection_persists_and_offline_does_not_fall_back(self):
         self.pair('alice')
         self.assertEqual(LocalBrowserBroker(Path(self.temp.name)).settings('alice')['transport'],'local')

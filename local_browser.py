@@ -76,7 +76,7 @@ class LocalBrowserBroker:
                 with self.db() as db:
                     db.execute('INSERT INTO devices(uid,token,selected) VALUES(?,?,1) ON CONFLICT(uid) DO UPDATE SET token=excluded.token,selected=1', (uid,self.digest(token)))
                 self.online[uid] = time.monotonic()
-                return {'token': token}
+                return {'token': token, 'profile_id': self.digest('browser-profile:'+uid)}
             token = body.get('token')
             if not isinstance(token, str) or len(token) > 200:
                 raise ProjectError('Invalid device credential', 403)

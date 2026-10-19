@@ -59,6 +59,30 @@ def unreadable_frame(frame):
     return bool(re.fullmatch(r'\s*-\s*iframe\s*(?:\[ref=e\d+\])?\s*',str(frame.get('snapshot','')),re.I))
 
 
+def consent_reject_ref(snapshot):
+    from local_browser_companion import CONSENT_CONTEXT, CONSENT_REJECT
+    lines=str(snapshot).splitlines()
+    for index,line in enumerate(lines):
+        if not re.search(r'^\s*-\s*(?:alertdialog|dialog)\b',line,re.I):
+            continue
+        indent=len(line)-len(line.lstrip())
+        block=[line]
+        for child in lines[index+1:]:
+            if child.strip() and len(child)-len(child.lstrip())<=indent:
+                break
+            block.append(child)
+        if not CONSENT_CONTEXT.search('\n'.join(block)):
+            continue
+        refs=[]
+        for child in block:
+            match=re.search(r'\bbutton "([^"]+)"[^\n]*\[ref=(e\d+)\]',child)
+            if match and CONSENT_REJECT.fullmatch(match[1].strip()):
+                refs.append(match[2])
+        if len(refs)==1:
+            return refs[0]
+    return None
+
+
 def safe_step(plan, frame):
     if not isinstance(plan,dict) or plan.get('action') not in ('navigate','click','type','back','scroll','finish','human'):
         raise ProjectError('The model did not return a valid browser step',502)
@@ -242,6 +266,13 @@ class BrowserAutomation:
                 if frame.get('page_issue') == 'empty_page':
                     run.update(state='human_required',summary=frame.get('warning') or 'The page has no readable content. Review it in human control.')
                     return
+                consent_ref=consent_reject_ref(frame.get('snapshot',''))
+                if consent_ref and run.get('consent_rejections',0)<3:
+                    self.browser.dispatch(user,{'session_id':run['session_id'],'view':view,'action':'click','ref':consent_ref},actor=run['id'])
+                    run['consent_rejections']=run.get('consent_rejections',0)+1
+                    run['steps']+=1
+                    run['summary']='Rejected optional cookies in a consent dialog.'
+                    continue
                 if site_blocked(frame):
                     run.update(state='site_blocked',summary="The website's security service blocked this server browser. Login and inbox access could not proceed. Check access in your own browser or contact the website; retrying the AI task will not resolve this block.")
                     return

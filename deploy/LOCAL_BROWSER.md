@@ -31,10 +31,17 @@ navigation. A pending action finishes before human handoff. Input values are
 excluded from local snapshots and input regions are masked in screenshots. The
 model sees website text; keep unrelated private pages out of the dedicated window.
 
-Temporary browser profiles live under `%LOCALAPPDATA%\OpenHermes\browser-sessions`
-and are cleared on stop, disconnect, normal companion exit, or command timeout.
-A hard process kill or power failure can leave files behind; this is not a secure
-erasure guarantee. Sessions expire after 15 minutes of inactivity.
+Persistent local profiles live under `%LOCALAPPDATA%\OpenHermes\browser-profiles`,
+separated by server origin and an account-scoped identifier. Stop, disconnect and
+companion exit close the window but preserve cookies and sign-ins. To erase a
+profile, close the companion and remove only the corresponding profile directory.
+Sessions expire after 15 minutes of inactivity; saved local browser data remains.
+
+Clearly labeled Reject all / Alle ablehnen consent buttons are clicked only inside
+recognized consent dialogs. Unknown or ambiguous banners are left for manual
+control. Saved consent reduces repeats; expiry and policy changes can show them
+again. GX10 browser runtimes remain temporary; their AI runs also reject clearly
+labeled consent dialogs, but do not retain consent across separate runtimes.
 
 The companion uses `/api/openhermes/browser/local` for scoped pairing/poll/result
 requests. Only authenticated Open WebUI users can issue commands or pairing codes;
