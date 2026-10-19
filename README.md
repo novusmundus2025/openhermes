@@ -1,8 +1,8 @@
 # OpenHermes
 
-Project memory: AGENTS.md records instructions, PLAN.md records the agent's plan,
-and CHECKPOINT.md records its verified summary. Existing documents are preserved
-when initializing projects. Each agent task independently writes TASK-<id>.md with
+Project memory: AGENTS.md records instructions, .hermes-project/PLAN.md records the agent's plan,
+and .hermes-project/CHECKPOINT.md records its verified summary. Existing documents are preserved
+when initializing projects. Each agent task independently writes .hermes-project/tasks/TASK-<id>.md with
 its exit status and tool-reported edits. Tasks request local Git snapshots after
 completion or failure; failed work is labeled partial. No automatic push occurs.
 Git snapshots can include manual working-tree edits. They are recovery points,

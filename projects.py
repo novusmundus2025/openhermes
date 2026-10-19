@@ -194,7 +194,7 @@ class ProjectService:
         init = self.run(['git', 'init', '--quiet', str(root)])
         if init.returncode:
             raise ProjectError('Could not initialize the project repository', 503)
-        self.run(['git', '-C', str(root), 'add', 'README.md', '.gitignore', 'AGENTS.md', 'PLAN.md', 'CHECKPOINT.md'])
+        self.run(['git', '-C', str(root), 'add', 'README.md', '.gitignore', 'AGENTS.md', '.hermes-project'])
         self.run(['git', '-C', str(root), '-c', 'user.name=OpenHermes', '-c', 'user.email=projects@localhost',
                   'commit', '--quiet', '-m', 'Create project'])
         registered = self.run([HERMES, '-p', profile, 'project', 'create', name, str(root), '--slug', slug], timeout=90)
@@ -302,8 +302,8 @@ class ProjectService:
                            '--in', '/workspace', '--continue', ('project-' + project['id'] if project.get('chat_id', '').startswith('legacy-') else 'chat-' + project['chat_id']), '--create-if-missing',
                            '--max-turns', '16', '-t', 'terminal,file']
                 input_data = (
-                    'Read /workspace/AGENTS.md, PLAN.md, CHECKPOINT.md and recent TASK-*.md records first. '
-                    'Write an actionable PLAN.md before substantial work. Update progress and CHECKPOINT.md with '
+                    'Read /workspace/AGENTS.md, .hermes-project/PLAN.md, .hermes-project/CHECKPOINT.md and recent .hermes-project/tasks/TASK-*.md records first. '
+                    'Write an actionable .hermes-project/PLAN.md before substantial work. Update progress and .hermes-project/CHECKPOINT.md with '
                     'verified results, tests, blockers and next steps before ending. Never store secrets in these files. '
                     'Project execution instructions: Work in /workspace. Before modifying an existing file, '
                     'call read_file to read its FULL CURRENT contents in this task, paging to the end if necessary. '
