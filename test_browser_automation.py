@@ -78,6 +78,19 @@ class AutomationTests(unittest.TestCase):
         run=self.launch();run['thread'].join(2)
         self.assertEqual(run['state'],'human_required')
         self.assertEqual(self.auto.status(self.user)['control'],'human')
+    def test_local_empty_page_stops_without_guessing_or_login_claim(self):
+        self.browser.sessions['alice']['frame'].update(page_issue='empty_page', warning='No readable content. Review the local window.')
+        self.engine(lambda *args:self.fail('Empty page must not be sent to model'))
+        run=self.launch();run['thread'].join(2)
+        self.assertEqual(run['state'],'human_required')
+        self.assertNotIn('login',run['summary'].lower())
+
+    def test_http_security_page_stops_without_model(self):
+        self.browser.sessions['alice']['frame'].update(page_issue='security_check',warning='HTTP 400 security-check page.')
+        self.engine(lambda *args:self.fail('Security-check page must not be sent to model'))
+        run=self.launch();run['thread'].join(2)
+        self.assertEqual(run['state'],'site_blocked')
+        self.assertIn('HTTP 400',run['summary'])
     def test_cardmarket_block_stops_without_model_or_inbox_claim(self):
         self.browser.sessions['alice']['frame'].update(title='Attention Required! | Cloudflare',
             snapshot='- heading "Sorry, you have been blocked" [level=1, ref=e1]\n- heading "You are unable to access cardmarket.com" [level=2, ref=e2]')

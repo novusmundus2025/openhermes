@@ -51,6 +51,31 @@ async def guided_page():
         'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'"})
 
 
+@router.post('/api/openhermes/browser/local')
+async def local_device(request: Request):
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 9*1024*1024:
+            raise HTTPException(413, 'Device response too large')
+    try:
+        body = json.loads(raw)
+        if not isinstance(body, dict) or body.get('action') not in ('pair','poll','result'):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise HTTPException(400, 'Invalid device request')
+    settings = config()
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=100)) as session:
+        async with session.post(settings['url']+'/browser-local', headers={'Authorization':'Bearer '+settings['key']}, json={'body':body}) as response:
+            data = await response.json()
+            return JSONResponse(data, status_code=response.status, headers={'Cache-Control':'no-store'})
+
+
+@router.get('/guided-browser/local-companion.py')
+async def local_companion():
+    return FileResponse(ROOT / 'local_browser_companion.py', filename='local_browser_companion.py', headers={'Cache-Control':'no-store'})
+
+
 @router.post('/api/openhermes/projects/action')
 async def action(request: Request, user=Depends(get_verified_user)):
     if user.role not in ('admin', 'user'):

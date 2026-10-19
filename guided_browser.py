@@ -124,6 +124,9 @@ class BrowserService:
         self.ensure_user, self.state, self.factory = ensure_user, Path(state), factory
         self.sessions, self.lock = {}, threading.RLock()
         self.automation = None
+        from local_browser import LocalBrowserBroker
+        self.local = LocalBrowserBroker(self.state)
+        self.local.active = lambda uid: uid in self.sessions
         threading.Thread(target=self.reap, daemon=True).start()
 
     def reap(self):
@@ -148,6 +151,10 @@ class BrowserService:
     def dispatch(self, user, body, actor=None):
         self.ensure_user(user)
         uid, action = user['id'], body.get('action')
+        if action in ('local_status', 'local_pair', 'local_select', 'local_revoke'):
+            if action != 'local_status' and uid in self.sessions:
+                raise ProjectError('Stop the current browser before changing its connection', 409)
+            return self.local.user_action(uid, body)
         if action in ('auto_start','auto_status','pause'):
             if not self.automation:
                 raise ProjectError('AI browser control is unavailable',503)
@@ -170,8 +177,16 @@ class BrowserService:
                         raise ProjectError('All guided browser slots are in use. Try again later.', 429)
                     sid = uuid.uuid4().hex
                     home = self.state / 'guided-browser' / hashlib.sha256(uid.encode()).hexdigest()[:32] / sid
+                    transport = self.local.settings(uid)['transport']
+                    if transport == 'local':
+                        if not self.local.settings(uid)['online']:
+                            raise ProjectError('Local browser is offline. Run the companion on your computer.', 409)
+                        from local_browser import LocalWorker
+                        worker = LocalWorker(self.local, uid, sid)
+                    else:
+                        worker = self.factory(home)
                     session = {'id': sid, 'view': 0, 'used': time.monotonic(), 'lock': threading.Lock(),
-                               'worker': self.factory(home), 'ready': False, 'snapshot': '', 'control':'human', 'frame':None}
+                               'worker': worker, 'transport':transport, 'ready': False, 'snapshot': '', 'control':'human', 'frame':None}
                     self.sessions[uid] = session
                 return {'active': True, 'session_id': session['id'], 'view': session['view']}
             if not session or body.get('session_id') != session['id']:
@@ -227,7 +242,7 @@ class BrowserService:
             frame = {'active': True, 'session_id': session['id'], 'view': session['view'], 'control':session.get('control','human'),
                     'url': data['url'], 'title': str(data.get('title', ''))[:500],
                     'snapshot': session['snapshot'], 'image': data.get('image'),
-                    'warning': data.get('warning')}
+                    'warning': data.get('warning'), 'page_issue': data.get('page_issue'), 'transport':session.get('transport','server')}
             session['frame']=frame
             return frame
         except ProjectError as exc:

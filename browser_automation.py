@@ -228,6 +228,12 @@ class BrowserAutomation:
                     if run['cancel'].is_set() or not session or session['id']!=run['session_id'] or session.get('control')!='auto':return
                     frame=dict(session.get('frame') or {})
                     view=session['view']
+                if frame.get('page_issue') == 'security_check':
+                    run.update(state='site_blocked',summary=frame.get('warning') or 'The website returned a security-check page. Use human control to review access.')
+                    return
+                if frame.get('page_issue') == 'empty_page':
+                    run.update(state='human_required',summary=frame.get('warning') or 'The page has no readable content. Review it in human control.')
+                    return
                 if site_blocked(frame):
                     run.update(state='site_blocked',summary="The website's security service blocked this server browser. Login and inbox access could not proceed. Check access in your own browser or contact the website; retrying the AI task will not resolve this block.")
                     return

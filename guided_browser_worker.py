@@ -68,6 +68,19 @@ def main():
                     raise ValueError('Native snapshot failed')
                 image = None
                 warning = None
+                page_issue = None
+                # Inspect only opaque views; no cookies, storage, inputs or console logs.
+                snapshot = view.get('snapshot','')
+                if len(snapshot.strip()) < 250:
+                    metadata = browser._session._run_browser_command(key, 'eval', ["JSON.stringify({status:performance.getEntriesByType('navigation')[0]?.responseStatus||0,security:/kpsdk|ips\\.js/i.test(document.documentElement.outerHTML),text:(document.body?.innerText||'').trim().length})"])
+                    raw_meta = metadata.get('data') or {}
+                    raw_meta = raw_meta.get('result',raw_meta.get('value',raw_meta)) if isinstance(raw_meta,dict) else raw_meta
+                    if isinstance(raw_meta,str):
+                        try: raw_meta=json.loads(raw_meta)
+                        except ValueError: raw_meta={}
+                    if isinstance(raw_meta,dict) and raw_meta.get('security') and raw_meta.get('status',0)>=400 and raw_meta.get('text',0)<80:
+                        page_issue='security_check'
+                        warning='The website returned HTTP '+str(raw_meta['status'])+' with a security-check page. No product results are readable. Review access in a local browser; this is not a login failure.'
                 from browser_automation import site_blocked
                 if site_blocked({'title':view.get('title') or result.get('title',''),'snapshot':view.get('snapshot','')}):
                     warning="The website's security service blocked this server browser. Login and inbox access are unavailable on this page."
@@ -78,7 +91,7 @@ def main():
                     else:
                         warning = (warning+' ' if warning else '')+'Screenshot unavailable; use the element snapshot.'
                 response = {'success': True, 'url': url, 'title': view.get('title') or result.get('title', ''),
-                            'snapshot': view.get('snapshot', ''), 'image': image, 'warning': warning}
+                            'snapshot': snapshot, 'image': image, 'warning': warning, 'page_issue':page_issue}
             except Exception:
                 # No raw text, URLs, credentials or native exception details in logs/history.
                 response = {'success': False, 'error': 'Native browser operation failed. Refresh or restart the session.'}

@@ -94,7 +94,7 @@ class Handler(BaseHTTPRequestHandler):
         self.respond(404, {"error": "Not found"})
 
     def do_POST(self):
-        if self.path == '/browser':
+        if self.path in ('/browser', '/browser-local'):
             return self.browser()
         if self.path == '/projects':
             return self.projects()
@@ -251,9 +251,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(401, {'error': 'Unauthorized'})
         try:
             length = int(self.headers.get('Content-Length', '0'))
-            if not 0 < length <= 16384:
+            if not 0 < length <= (10*1024*1024 if self.path == '/browser-local' else 16384):
                 return self.respond(413, {'error': 'Browser request too large'})
             request = json.loads(self.rfile.read(length))
+            if self.path == '/browser-local':
+                if not isinstance(request, dict) or not isinstance(request.get('body'), dict):
+                    raise ValueError()
+                return self.respond(200, self.server.browser.local.device(request['body']))
             if not isinstance(request, dict) or not isinstance(request.get('user'), dict) or not isinstance(request.get('body'), dict):
                 raise ValueError()
             return self.respond(200, self.server.browser.dispatch(request['user'], request['body']))

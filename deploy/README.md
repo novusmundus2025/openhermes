@@ -52,7 +52,8 @@ python3 -m unittest test_agent_recovery test_agent_contracts test_projects test_
 
 Filesystem tests require Linux APIs. Live Swagger regression is separately opt-in
 and consumes inference. This prototype has not been load-tested for 200 concurrent
-users. Human browser login handoff is not integrated.
+users. Dedicated local browsing and manual login handoff are documented in
+[LOCAL_BROWSER.md](LOCAL_BROWSER.md).
 
 No open-source license is granted. Dependency licenses belong to their authors;
 the frontend bundle preserves third-party legal comments.
