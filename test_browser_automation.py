@@ -59,6 +59,14 @@ class AutomationTests(unittest.TestCase):
         self.assertIn('could not proceed',run['summary'])
         self.assertEqual(self.auto.status(self.user)['control'],'human')
 
+    def test_iframe_only_page_refreshes_once_without_inference(self):
+        self.browser.sessions['alice']['frame']['snapshot']='- Iframe [ref=e1]'
+        self.browser.sessions['alice']['worker'].frame['snapshot']='- Iframe [ref=e1]'
+        self.engine(lambda *args:self.fail('Unreadable page must not be sent to the model'))
+        run=self.launch();run['thread'].join(2)
+        self.assertEqual(run['state'],'human_required');self.assertEqual(run['steps'],1)
+        self.assertIn('could not be verified',run['summary'])
+
     def test_pause_discards_pending_model_result_and_allows_human_fill(self):
         entered=threading.Event();release=threading.Event()
         def planner(*args):
@@ -82,6 +90,13 @@ class AutomationTests(unittest.TestCase):
 
 
 class PlannerBoundaryTests(unittest.TestCase):
+    def test_german_store_search_is_allowed_but_purchase_and_login_are_not(self):
+        frame={'snapshot':'- searchbox "Wonach suchst du?" [ref=e78]\n- button "Suche abschicken" [ref=e105]\n- button "In den Warenkorb" [ref=e5]\n- textbox "Passwort" [ref=e6]'}
+        self.assertEqual(safe_step({'action':'type','ref':'e78','text':'GX10'},frame)['action'],'type')
+        self.assertEqual(safe_step({'action':'click','ref':'e105'},frame)['action'],'click')
+        self.assertEqual(safe_step({'action':'click','ref':'e5'},frame)['action'],'human')
+        self.assertEqual(safe_step({'action':'type','ref':'e6','text':'secret'},frame)['action'],'human')
+        self.assertTrue(login_required(frame))
     def test_provider_batch_uses_first_action_only(self):
         import io,json,time
         engine=BrowserAutomation(None,{'model_upstream':'https://provider.example/v1'})
@@ -105,6 +120,9 @@ class PlannerBoundaryTests(unittest.TestCase):
         request=send.call_args[0][0]
         self.assertNotIn('Authorization',request.headers)
         self.assertIn('Example Domain',request.data.decode())
+        from datetime import datetime
+        context=json.loads(json.loads(request.data)['messages'][1]['content'])
+        self.assertIsNotNone(datetime.fromisoformat(context['current_time']).tzinfo)
 
     def test_input_values_removed_and_write_actions_handed_off(self):
         text='- textbox "Email" [ref=e1]: private-value\n- textbox "Password" [ref=e2]: secret-value'

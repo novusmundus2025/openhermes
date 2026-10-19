@@ -5,6 +5,7 @@ import re
 import threading
 import time
 import uuid
+from datetime import datetime
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
@@ -40,13 +41,17 @@ def login_required(frame):
     snapshot=frame.get('snapshot','')
     return bool(re.search(r'checking your browser|verify you are human|performing security verification|just a moment',str(frame.get('title',''))+'\n'+snapshot,re.I)
                 or re.search(r'/(login|signin|sign-in|log-in|oauth|authorize)(/|$)', path)
-                or re.search(r'(textbox|input)[^\n]*(password|passcode|one.time|verification.code|security.code|captcha)',snapshot,re.I))
+                or re.search(r'(textbox|input)[^\n]*(password|passwort|passcode|one.time|verification.code|security.code|captcha)',snapshot,re.I))
 
 
 def site_blocked(frame):
     headings='\n'.join(line for line in str(frame.get('snapshot','')).splitlines() if re.search(r'\bheading\b',line,re.I))
     text=str(frame.get('title',''))+'\n'+headings
     return bool(re.search(r'sorry,? you have been blocked|you are unable to access|access denied|request blocked',text,re.I))
+
+
+def unreadable_frame(frame):
+    return bool(re.fullmatch(r'\s*-\s*iframe\s*(?:\[ref=e\d+\])?\s*',str(frame.get('snapshot','')),re.I))
 
 
 def safe_step(plan, frame):
@@ -60,11 +65,13 @@ def safe_step(plan, frame):
         if not line or not re.fullmatch(r'e\d{1,6}',ref):
             raise ProjectError('The model selected an element outside the current view',409)
         # State-changing and authentication actions always require the human lane.
-        if re.search(r'\b(delete|remove|archive|send|submit|publish|purchase|checkout|pay|buy|order|save|create|update|upload|confirm|approve|accept|transfer|unsubscribe|logout|password|passcode|sign.in|log.in|captcha)\b',line,re.I):
+        search_control=bool(re.search(r'\b(searchbox|search|find|query|suche|suchen|suchst|suchbegriff)\b',line,re.I))
+        search_submit=action=='click' and bool(re.search(r'button "(?:submit search|search submit|suche abschicken|suche absenden)"',line,re.I))
+        if re.search(r'\b(delete|remove|archive|send|submit|publish|purchase|checkout|pay|buy|order|save|create|update|upload|confirm|approve|accept|transfer|unsubscribe|logout|password|passcode|sign.in|log.in|captcha|passwort|anmelden|anmeldung|bestellen|kaufen|warenkorb|bezahlen|löschen|senden|speichern)\b',line,re.I) and not search_submit:
             return {'action':'human','summary':'This action needs human control or approval in the browser workspace.'}
         step['ref']=ref
         if action=='type':
-            if not re.search(r'\b(search|find|query)\b',line,re.I):
+            if not search_control:
                 return {'action':'human','summary':'Use human control to fill this form. AI only fills clearly labeled search fields.'}
             text=plan.get('text')
             if not isinstance(text,str) or len(text)>500:
@@ -156,9 +163,11 @@ class BrowserAutomation:
             'Work read-only: never send, delete, archive, purchase, submit forms or alter accounts. '
             'For login, credentials, CAPTCHA, approval or any sensitive/state-changing action choose human. '
             'Never request or infer passwords, cookies or tokens. Only type into clearly identified search fields. '
+            'Interpret latest and relative dates using the provided current_time. Verify prices and dates from page evidence. '
             'Use finish with a concise factual summary only when the goal is satisfied by visible evidence. '
             'Do not claim an action happened without observed results. No shell or JavaScript is available.')
-        context={'goal':run['goal'],'url':display_url(frame.get('url')),'title':frame.get('title',''),'snapshot':model_snapshot(frame.get('snapshot','')),
+        context={'current_time':datetime.now().astimezone().isoformat(timespec='seconds'),
+                 'goal':run['goal'],'url':display_url(frame.get('url')),'title':frame.get('title',''),'snapshot':model_snapshot(frame.get('snapshot','')),
                  'recent_actions':run['history'][-4:]}
         request={'model':self.settings.get('model','mundusx-agnostic'),'stream':False,'temperature':0,'max_tokens':1200,
                  'messages':[{'role':'system','content':system},{'role':'user','content':json.dumps(context)}],
@@ -209,6 +218,15 @@ class BrowserAutomation:
                 if login_required(frame):
                     run.update(state='human_required',summary='Login or verification detected. AI is paused. Use human control in the browser workspace; resume only after signing in.')
                     return
+                if unreadable_frame(frame):
+                    # One bounded refresh tolerates a transient loading frame. Do
+                    # not spend inference calls repeatedly guessing at a blank page.
+                    frame=self.browser.dispatch(user,{'session_id':run['session_id'],'action':'refresh'},actor=run['id'])
+                    run['steps']+=1
+                    if unreadable_frame(frame):
+                        run.update(state='human_required',summary='This page exposes only an embedded frame with no readable content in the native browser. Search results and prices could not be verified. Review it in human control or try another retailer.')
+                        return
+                    continue
                 step=safe_step(self.planner(user,run,frame),frame)
                 if run['cancel'].is_set():return
                 if step['action'] in ('finish','human'):

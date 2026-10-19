@@ -52,8 +52,9 @@ def main():
                 if not result.get('success'):
                     raise ValueError('Native browser operation failed')
                 key = browser._last_session_key(task)
-                if action in ('navigate', 'click', 'back'):
-                    browser._session._run_browser_command(key, 'wait', ['--load', 'domcontentloaded'], timeout=15)
+                # Native actions already attach a page snapshot. A redundant wait
+                # can time out on dynamic shops and cause Hermes to recycle the
+                # successful browser session into about:blank.
                 current = browser._session._run_browser_command(key, 'get', ['url'])
                 raw = current.get('data') or {}
                 url = raw.get('url') or raw.get('value') or raw.get('result') or result.get('url')
