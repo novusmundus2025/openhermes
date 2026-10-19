@@ -13,6 +13,22 @@ def event(kind,name,path,output=None,i='x'):
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_timeout_reports_missing_tools_without_retry(self):
+        emitted=[]
+        code=run([sys.executable,'-c','raise SystemExit(124)'],'test',emitted.append)
+        self.assertEqual(code,124)
+        self.assertIn('300-second',emitted[-1]['text'])
+        self.assertIn('No tool results',emitted[-1]['text'])
+
+    def test_timeout_warns_about_partial_saved_edits(self):
+        emitted=[]
+        receipt=event('tool_result','write_file','/workspace/test.js',{'verified':True})
+        script='import json; print('+repr(json.dumps(receipt))+'); raise SystemExit(124)'
+        code=run([sys.executable,'-c',script],'test',emitted.append)
+        self.assertEqual(code,124)
+        self.assertIn('1 file edit(s)',emitted[-1]['text'])
+        self.assertIn('incomplete',emitted[-1]['text'])
+
     def receipts(self):
         p='/workspace/README.md';events=[]
         for i,(name,data) in enumerate([('read_file',{'content':'1|old','truncated':False}),('patch',{'verified':True}),('read_file',{'content':'1|new','truncated':False})]):

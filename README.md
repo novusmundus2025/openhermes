@@ -1,5 +1,15 @@
 # OpenHermes
 
+Project memory: AGENTS.md records instructions, PLAN.md records the agent's plan,
+and CHECKPOINT.md records its verified summary. Existing documents are preserved
+when initializing projects. Each agent task independently writes TASK-<id>.md with
+its exit status and tool-reported edits. Tasks request local Git snapshots after
+completion or failure; failed work is labeled partial. No automatic push occurs.
+Git snapshots can include manual working-tree edits. They are recovery points,
+not proof of correctness or a substitute for backups. Checkpoint failures appear
+in the execution log. Secrets must stay out of project files; ignored files and
+common environment/private-key files are excluded from automatic staging.
+
 ## Projects coding workspace
 
 Open `http://YOUR_SERVER:3000/projects/`, or choose **Projects** in the

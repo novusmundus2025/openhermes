@@ -189,10 +189,12 @@ class ProjectService:
         root.chmod(0o755)
         (root / 'README.md').write_text('# ' + name + '\n\nBuilt with Hermes.\n')
         (root / '.gitignore').write_text('node_modules/\n.venv/\n__pycache__/\n.env\n.env.*\n')
+        from project_memory import initialize
+        initialize(root)
         init = self.run(['git', 'init', '--quiet', str(root)])
         if init.returncode:
             raise ProjectError('Could not initialize the project repository', 503)
-        self.run(['git', '-C', str(root), 'add', 'README.md', '.gitignore'])
+        self.run(['git', '-C', str(root), 'add', 'README.md', '.gitignore', 'AGENTS.md', 'PLAN.md', 'CHECKPOINT.md'])
         self.run(['git', '-C', str(root), '-c', 'user.name=OpenHermes', '-c', 'user.email=projects@localhost',
                   'commit', '--quiet', '-m', 'Create project'])
         registered = self.run([HERMES, '-p', profile, 'project', 'create', name, str(root), '--slug', slug], timeout=90)
@@ -282,6 +284,8 @@ class ProjectService:
         unexecuted_tools = False
         try:
             container = self.container(project)
+            from project_memory import initialize
+            initialize(project['root'])
             with self.connect() as db:
                 db.execute("UPDATE project_jobs SET state='running',updated_at=? WHERE id=?", (int(time.time()), jid))
             if kind == 'command':
@@ -298,6 +302,9 @@ class ProjectService:
                            '--in', '/workspace', '--continue', ('project-' + project['id'] if project.get('chat_id', '').startswith('legacy-') else 'chat-' + project['chat_id']), '--create-if-missing',
                            '--max-turns', '16', '-t', 'terminal,file']
                 input_data = (
+                    'Read /workspace/AGENTS.md, PLAN.md, CHECKPOINT.md and recent TASK-*.md records first. '
+                    'Write an actionable PLAN.md before substantial work. Update progress and CHECKPOINT.md with '
+                    'verified results, tests, blockers and next steps before ending. Never store secrets in these files. '
                     'Project execution instructions: Work in /workspace. Before modifying an existing file, '
                     'call read_file to read its FULL CURRENT contents in this task, paging to the end if necessary. '
                     'Terminal cat output and copies from earlier conversation turns do not establish the native '
@@ -368,6 +375,19 @@ class ProjectService:
         finally:
             if timer:
                 timer.cancel()
+            if kind == 'agent':
+                try:
+                    from project_memory import record
+                    record(project['root'], jid, exit_code, events)
+                    # Git runs inside the sandbox. Disable repository hooks and signing.
+                    script = "git -c core.hooksPath=/dev/null add -A -- . ':!.env' ':!.env.*' ':!*.pem' ':!*.key' && if ! git diff --cached --quiet; then git -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=OpenHermes -c user.email=projects@localhost commit -m " + shlex.quote(('Task checkpoint: ' if exit_code == 0 else 'Partial task checkpoint: ') + jid) + '; fi'
+                    snapshot = self.run(['docker', 'exec', '--workdir', '/workspace', 'openhermes-project-' + project['id'], 'bash', '-lc', script], timeout=30)
+                    if snapshot.returncode:
+                        output += '\nLocal Git checkpoint failed; files remain on disk.'
+                    else:
+                        output += '\nLocal Git checkpoint recorded (or no staged changes).'
+                except Exception:
+                    output += '\nProject checkpoint could not be fully recorded; inspect files and Git status.'
             if tracker:
                 tracker.finish('completed' if exit_code == 0 else 'failed_or_interrupted')
             with self.connect() as db:
