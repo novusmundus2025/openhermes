@@ -44,6 +44,34 @@ class AutomationTests(unittest.TestCase):
         self.assertEqual(run['state'],'completed');self.assertEqual(run['steps'],1)
         self.assertEqual(self.auto.status(self.user)['control'],'human')
         self.assertNotIn('test query',str(run['history']))
+    def test_invalid_reference_refreshes_and_replans_without_executing_it(self):
+        plans=iter([{'action':'click','ref':'e999'},{'action':'click','ref':'e1'},{'action':'finish','summary':'Read the page.'}])
+        feedback=[]
+        def planner(user,run,frame):
+            feedback.append(run.get('feedback'));return next(plans)
+        self.engine(planner)
+        run=self.launch();run['thread'].join(2)
+        self.assertEqual(run['state'],'completed');self.assertEqual(run['ref_recoveries'],1)
+        self.assertEqual([c['action'] for c in self.browser.sessions['alice']['worker'].calls],['navigate','refresh','click'])
+        self.assertIn('NOT executed',feedback[1])
+        self.assertIsNone(feedback[2])
+
+    def test_repeated_invalid_references_stop_after_two_refreshes(self):
+        self.engine(lambda *args:{'action':'click','ref':'e999'})
+        run=self.launch();run['thread'].join(2)
+        self.assertEqual(run['state'],'human_required');self.assertEqual(run['ref_recoveries'],2)
+        self.assertEqual(run['steps'],2)
+        self.assertEqual([c['action'] for c in self.browser.sessions['alice']['worker'].calls],['navigate','refresh','refresh'])
+
+    def test_reference_outside_model_visible_excerpt_is_not_executed(self):
+        snapshot='- paragraph '+('x'*15000)+'\n- link "Unseen" [ref=e999]'
+        self.browser.sessions['alice']['frame']['snapshot']=snapshot
+        self.browser.sessions['alice']['worker'].frame['snapshot']=snapshot
+        self.engine(lambda *args:{'action':'click','ref':'e999'})
+        run=self.launch();run['thread'].join(2)
+        self.assertEqual(run['state'],'human_required')
+        self.assertNotIn('click',[c['action'] for c in self.browser.sessions['alice']['worker'].calls])
+
     def test_login_handoff_never_calls_model(self):
         self.browser.sessions['alice']['frame']['snapshot']='- textbox "Password" [ref=e3]'
         self.engine(lambda *args:self.fail('Login page must not be sent to model'))
@@ -108,6 +136,8 @@ class PlannerBoundaryTests(unittest.TestCase):
                 {'url':'https://www.google.com/','snapshot':'- searchbox "Search" [ref=e1]\n- button "Search" [ref=e2]'})
         self.assertEqual(plan,{'action':'type','ref':'e1','text':'AI news'})
         self.assertFalse(json.loads(send.call_args[0][0].data)['parallel_tool_calls'])
+        request=json.loads(send.call_args[0][0].data)
+        self.assertEqual(request['tools'][0]['function']['parameters']['properties']['ref']['enum'],['e1','e2'])
 
     def test_planner_supports_upstream_without_key_and_includes_title(self):
         import io,json,time

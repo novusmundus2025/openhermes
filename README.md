@@ -31,6 +31,12 @@ blocked" page during testing. This prevents login and inbox access; adding a bro
 or retrying the AI task does not fix site access. Verification challenges hand back
 to human control. The integration does not bypass website security checks.
 
+Invalid AI element references are never executed. The controller advertises refs
+from the current sanitized snapshot and permits at most two recovery refreshes per
+run, each counted against the action budget. It replans with explicit feedback;
+repeated invalid selections hand back to human control. Unreadable iframe-only
+pages receive one refresh before handoff rather than repeated inference calls.
+
 For the complete multi-user setup sequence and runnable deployment scripts, see
 [deploy/SETUP.md](deploy/SETUP.md). Existing installations should use its update
 section rather than generating new secrets.
