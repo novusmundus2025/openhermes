@@ -147,6 +147,18 @@ class ProjectBoundaryTests(unittest.TestCase):
                 self.service.job(p, 'agent', 'change files')
         self.assertEqual(caught.exception.status, 409)
 
+    def test_existing_container_refreshes_execution_budget(self):
+        import json,yaml
+        project=self.service.project('alice','project-a')
+        runtime=self.root/'project-runtime/project-a';runtime.mkdir(parents=True)
+        (runtime/'config.yaml').write_text('agent:\n  run_budget_seconds: 240\nmodel:\n  default: fixture-model\n')
+        inspected=[{'Config':{'Labels':{'org.openhermes.project':'project-a'}},'State':{'Running':True}}]
+        with patch.object(self.service,'run',return_value=subprocess.CompletedProcess([],0,json.dumps(inspected),'')):
+            self.service.container(project)
+        config=yaml.safe_load((runtime/'config.yaml').read_text())
+        self.assertEqual(config['agent']['run_budget_seconds'],600)
+        self.assertEqual(config['model']['default'],'fixture-model')
+
     def test_git_inspection_runs_inside_container(self):
         with patch.object(self.service, 'container', return_value='isolated-project'), patch.object(
             self.service, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as run:

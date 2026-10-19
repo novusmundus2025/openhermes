@@ -258,6 +258,12 @@ class ProjectService:
                 info = json.loads(inspected.stdout)[0]
                 if info['Config'].get('Labels', {}).get('org.openhermes.project') != project['id']:
                     raise ProjectError('Project container identity mismatch', 503)
+                # Existing containers use bind-mounted configuration too. Refresh
+                # execution policy rather than retaining budgets from creation day.
+                runtime = self.state / 'project-runtime' / project['id']
+                config = yaml.safe_load(read_bytes(runtime, 'config.yaml')) or {}
+                config.setdefault('agent', {}).update(max_turns=16, run_budget_seconds=600)
+                private_write(runtime, 'config.yaml', yaml.safe_dump(config))
                 if not info['State']['Running']:
                     result = self.run(['docker', 'start', name])
                     if result.returncode:
