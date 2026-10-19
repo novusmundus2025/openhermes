@@ -118,6 +118,15 @@ class AutomationTests(unittest.TestCase):
 
 
 class PlannerBoundaryTests(unittest.TestCase):
+    def test_required_tool_mode_still_rejects_unadvertised_tool(self):
+        import io,json,time
+        engine=BrowserAutomation(None,{'model_upstream':'https://provider.example/v1'})
+        response={'choices':[{'message':{'tool_calls':[{'function':{'name':'run_shell','arguments':'{}'}}]}}]}
+        with patch('browser_automation.urlopen',return_value=io.BytesIO(json.dumps(response).encode())):
+            with self.assertRaises(ProjectError):
+                engine.plan({'id':'alice'},{'started':time.monotonic(),'cancel':threading.Event(),'goal':'Read title','history':[]},
+                    {'url':'https://example.com/','title':'Example Domain','snapshot':'- heading "Example Domain"'})
+
     def test_german_store_search_is_allowed_but_purchase_and_login_are_not(self):
         frame={'snapshot':'- searchbox "Wonach suchst du?" [ref=e78]\n- button "Suche abschicken" [ref=e105]\n- button "In den Warenkorb" [ref=e5]\n- textbox "Passwort" [ref=e6]'}
         self.assertEqual(safe_step({'action':'type','ref':'e78','text':'GX10'},frame)['action'],'type')
@@ -137,6 +146,8 @@ class PlannerBoundaryTests(unittest.TestCase):
         self.assertEqual(plan,{'action':'type','ref':'e1','text':'AI news'})
         self.assertFalse(json.loads(send.call_args[0][0].data)['parallel_tool_calls'])
         request=json.loads(send.call_args[0][0].data)
+        self.assertEqual(request['tool_choice'],'required')
+        self.assertEqual([tool['function']['name'] for tool in request['tools']],['browser_step'])
         self.assertEqual(request['tools'][0]['function']['parameters']['properties']['ref']['enum'],['e1','e2'])
 
     def test_planner_supports_upstream_without_key_and_includes_title(self):

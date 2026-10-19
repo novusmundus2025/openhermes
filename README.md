@@ -36,6 +36,10 @@ from the current sanitized snapshot and permits at most two recovery refreshes p
 run, each counted against the action budget. It replans with explicit feedback;
 repeated invalid selections hand back to human control. Unreadable iframe-only
 pages receive one refresh before handoff rather than repeated inference calls.
+Browser planning advertises one tool with `tool_choice: required`; explicitly named
+tool selection is incompatible with the current provider gateway and can return
+HTTP 502. Returned tool names, allowed actions, current refs and ownership are
+still validated locally before any browser operation.
 
 For the complete multi-user setup sequence and runnable deployment scripts, see
 [deploy/SETUP.md](deploy/SETUP.md). Existing installations should use its update

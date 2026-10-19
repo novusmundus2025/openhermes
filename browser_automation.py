@@ -183,7 +183,11 @@ class BrowserAutomation:
                  'recent_actions':run['history'][-4:]}
         request={'model':self.settings.get('model','mundusx-agnostic'),'stream':False,'temperature':0,'max_tokens':1200,
                  'messages':[{'role':'system','content':system},{'role':'user','content':json.dumps(context)}],
-                 'tools':[step_tool],'tool_choice':{'type':'function','function':{'name':'browser_step'}},'parallel_tool_calls':False}
+                 # One tool is advertised. The provider's explicitly named-tool
+                 # path rejects otherwise valid browser plans with HTTP 502.
+                 # Required mode interoperates with that gateway; validate the
+                 # returned name and every action locally before executing it.
+                 'tools':[step_tool],'tool_choice':'required','parallel_tool_calls':False}
         tracker=None
         if self.connect:
             from usage import Tracker
