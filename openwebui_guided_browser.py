@@ -2,7 +2,7 @@
 title: Hermes Guided Browser — Ehda
 author: OpenHermes
 description: Native Hermes browsing with bounded Ehda AI control and a human login lane.
-version: 2.0.0
+version: 2.1.0
 """
 import asyncio
 import json
@@ -39,7 +39,9 @@ class Pipe:
         workspace=self.valves.WORKSPACE_URL
         if data.get('session_id'):
             workspace=workspace.split('#',1)[0]+'#view='+str(data.get('view',0))+'&sid='+data['session_id']
-        text=summary+'\n\n[Open live browser / human control]('+workspace+')'
+        auto=data.get('auto') or {}
+        answer=auto.get('answer') if auto.get('state')=='completed' else None
+        text=(answer or summary)+'\n\n[Open live browser / human control]('+workspace+')'
         if show_elements and data.get('control','human')=='human':
             # Do not include login-page snapshots or filled field values in chat.
             snapshot=str(data.get('snapshot',''))

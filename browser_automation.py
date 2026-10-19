@@ -91,6 +91,8 @@ def safe_step(plan, frame):
         step['direction']=plan['direction']
     else:
         step['summary']=str(plan.get('summary',''))[:4000]
+        if action=='finish':
+            step['answer']=str(plan.get('answer') or plan.get('summary') or '')[:16000]
     return step
 
 
@@ -98,7 +100,8 @@ STEP_TOOL={'type':'function','function':{'name':'browser_step','description':'Ch
     'parameters':{'type':'object','properties':{
         'action':{'type':'string','enum':['navigate','click','type','back','scroll','finish','human']},
         'ref':{'type':'string'},'url':{'type':'string'},'text':{'type':'string'},
-        'direction':{'type':'string','enum':['up','down']},'summary':{'type':'string'}},'required':['action'],'additionalProperties':False}}}
+        'direction':{'type':'string','enum':['up','down']},'summary':{'type':'string'},
+        'answer':{'type':'string','description':'For finish: the actual user-facing findings in Markdown, including requested names, prices, units, currency and source links. Never merely say results are on the page.'}},'required':['action'],'additionalProperties':False}}}
 
 
 class BrowserAutomation:
@@ -114,6 +117,8 @@ class BrowserAutomation:
             result={'active':bool(session),'session_id':session['id'] if session else None,
                     'view':session['view'] if session else 0,'control':session.get('control','human') if session else 'human',
                     'auto':{k:run[k] for k in ('id','state','steps','max_steps','summary')} if run else None}
+            if run and run.get('state')=='completed':
+                result['auto']['answer']=run.get('answer','')
             if session and session.get('frame'):
                 result.update(session['frame'])
                 result['control']=session.get('control','human')
@@ -171,7 +176,10 @@ class BrowserAutomation:
             'For login, credentials, CAPTCHA, approval or any sensitive/state-changing action choose human. '
             'Never request or infer passwords, cookies or tokens. Only type into clearly identified search fields. '
             'Interpret latest and relative dates using the provided current_time. Verify prices and dates from page evidence. '
-            'Use finish with a concise factual summary only when the goal is satisfied by visible evidence. '
+            'Use finish only when the goal is satisfied by visible evidence. Put the ACTUAL requested findings in answer, formatted as Markdown for the chat. '
+            'For pricing, list the observed product/GPU names and their prices, currency, billing units, and source URL; use a table when useful. '
+            'For comparisons, include the requested comparison and limitations. Do not just say information is displayed on the page or ask the user to view the browser. '
+            'summary is only a brief run status; answer is the substantive response. Never invent missing prices or details; state what could not be verified. '
             'Do not claim an action happened without observed results. No shell or JavaScript is available.')
         snapshot=model_snapshot(frame.get('snapshot',''))
         refs=list(dict.fromkeys(re.findall(r'\[ref=(e\d+)\]',snapshot)))
@@ -181,7 +189,7 @@ class BrowserAutomation:
                  'goal':run['goal'],'url':display_url(frame.get('url')),'title':frame.get('title',''),'snapshot':snapshot,
                  'available_refs':refs,'controller_feedback':run.get('feedback'),
                  'recent_actions':run['history'][-4:]}
-        request={'model':self.settings.get('model','mundusx-agnostic'),'stream':False,'temperature':0,'max_tokens':1200,
+        request={'model':self.settings.get('model','mundusx-agnostic'),'stream':False,'temperature':0,'max_tokens':2400,
                  'messages':[{'role':'system','content':system},{'role':'user','content':json.dumps(context)}],
                  # One tool is advertised. The provider's explicitly named-tool
                  # path rejects otherwise valid browser plans with HTTP 502.
@@ -267,6 +275,8 @@ class BrowserAutomation:
                 if run['cancel'].is_set():return
                 if step['action'] in ('finish','human'):
                     run.update(state='completed' if step['action']=='finish' else 'human_required',summary=step.get('summary') or 'Human control is required.')
+                    if step['action']=='finish':
+                        run['answer']=step.get('answer','')
                     return
                 self.browser.dispatch(user,{'session_id':run['session_id'],'view':view,**step},actor=run['id'])
                 run.pop('feedback',None)

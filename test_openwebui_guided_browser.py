@@ -5,6 +5,16 @@ from openwebui_guided_browser import Pipe, starting_url
 
 
 class FunctionTests(unittest.TestCase):
+    def test_completed_findings_are_returned_in_chat_instead_of_status(self):
+        answer='| GPU | USD / GPU-hour |\n|---|---|\n| Example GPU | $1.25 |\n\nSource: https://example.com/pricing'
+        result=Pipe()._message({'auto':{'state':'completed','answer':answer}},'Prices are displayed on the page.')
+        self.assertIn(answer,result)
+        self.assertNotIn('Prices are displayed on the page.',result)
+
+    def test_unfinished_run_does_not_display_a_stale_answer(self):
+        result=Pipe()._message({'auto':{'state':'failed','answer':'stale prices'}},'Provider unavailable.')
+        self.assertIn('Provider unavailable.',result)
+        self.assertNotIn('stale prices',result)
     def test_browser_reference_is_in_link_not_visible_protocol_comment(self):
         result=Pipe()._message({'view':3,'session_id':'abc123'},'Ready')
         self.assertIn('/guided-browser/#view=3&sid=abc123',result)

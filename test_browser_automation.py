@@ -44,6 +44,11 @@ class AutomationTests(unittest.TestCase):
         self.assertEqual(run['state'],'completed');self.assertEqual(run['steps'],1)
         self.assertEqual(self.auto.status(self.user)['control'],'human')
         self.assertNotIn('test query',str(run['history']))
+    def test_final_findings_survive_into_status_for_chat(self):
+        answer='Example GPU: $1.25 per GPU-hour. Source: https://example.com/pricing'
+        self.engine(lambda *args:{'action':'finish','summary':'Pricing found.','answer':answer})
+        run=self.launch();run['thread'].join(2)
+        self.assertEqual(self.auto.status(self.user)['auto']['answer'],answer)
     def test_invalid_reference_refreshes_and_replans_without_executing_it(self):
         plans=iter([{'action':'click','ref':'e999'},{'action':'click','ref':'e1'},{'action':'finish','summary':'Read the page.'}])
         feedback=[]
