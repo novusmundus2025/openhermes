@@ -1,0 +1,16 @@
+{
+  "host": "172.17.0.1",
+  "port": 8643,
+  "bridge_key": "REPLACE_WITH_RANDOM_SECRET_AT_LEAST_32_CHARACTERS",
+  "upstream": "http://172.17.0.1:8642",
+  "upstream_key": "REPLACE_WITH_GATEWAY_SECRET",
+  "model_upstream": "https://your-inference-provider.example/v1",
+  "model_upstream_key": "REPLACE_WITH_PROVIDER_CREDENTIAL",
+  "credits": {
+    "version": "tokens100-chars400-v1",
+    "formula": "tokens100",
+    "fallback_formula": "chars400",
+    "initial_credits": 0
+  },
+  "contribution_source": null
+}

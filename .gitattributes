@@ -1,0 +1,6 @@
+* text=auto
+*.py text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.service text eol=lf
+web/app.js -whitespace

@@ -1,0 +1,88 @@
+"""Open WebUI extension: use its verified session on every Projects request."""
+import base64
+import hashlib
+import hmac
+import json
+from pathlib import Path
+import time
+import aiohttp
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse, RedirectResponse, Response
+from open_webui.utils.auth import get_verified_user
+from open_webui.models.users import Users
+
+router = APIRouter()
+ROOT = Path(__file__).resolve().parent
+
+
+def config():
+    return json.loads(Path('/app/backend/data/openhermes-bridge.json').read_text())
+
+
+async def forward(user, body):
+    settings = config()
+    identity = {k: getattr(user, k, '') for k in ('id', 'name', 'email')}
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=240)) as session:
+        async with session.post(settings['url'] + '/projects',
+                headers={'Authorization': 'Bearer ' + settings['key']},
+                json={'user': identity, 'body': body}) as response:
+            data = await response.json()
+            if response.status != 200:
+                raise HTTPException(response.status, data.get('error', 'Project request failed'))
+            return data
+
+
+@router.post('/api/openhermes/projects/action')
+async def action(request: Request, user=Depends(get_verified_user)):
+    if user.role not in ('admin', 'user'):
+        raise HTTPException(403, 'Account approval is required')
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, 'Invalid project request')
+    if body.get('action') == 'preview_url':
+        # First check ownership, then issue an expiring read-only ticket for iframe assets.
+        await forward(user, {'action': 'tree', 'project_id': body.get('project_id')})
+        payload = base64.urlsafe_b64encode(json.dumps({'uid': user.id,
+            'pid': body['project_id'], 'exp': int(time.time()) + 600}, separators=(',', ':')).encode()).decode().rstrip('=')
+        mac = hmac.new(config()['key'].encode(), ('preview:' + payload).encode(), hashlib.sha256).hexdigest()
+        return {'url': '/api/openhermes/projects/preview/' + payload + '.' + mac + '/'}
+    return await forward(user, body)
+
+
+@router.get('/api/openhermes/projects/preview/{ticket}/{path:path}')
+async def preview(ticket: str, path: str):
+    try:
+        payload, signature = ticket.split('.')
+        expected = hmac.new(config()['key'].encode(), ('preview:' + payload).encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError()
+        values = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))
+        if values['exp'] < time.time():
+            raise ValueError()
+        user = await Users.get_user_by_id(values['uid'])
+        if user is None or user.role not in ('user', 'admin'):
+            raise ValueError()
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(403, 'Preview expired. Refresh the preview.')
+    data = await forward(user, {'action': 'preview', 'project_id': values['pid'], 'path': path or 'index.html'})
+    return Response(base64.b64decode(data['data']), media_type=data['mime'], headers={
+        'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "sandbox allow-scripts; default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
+        'Access-Control-Allow-Origin': '*', 'Referrer-Policy': 'no-referrer'})
+
+
+@router.get('/projects')
+async def projects_redirect():
+    return RedirectResponse('/projects/')
+
+
+@router.get('/projects/')
+async def projects_page():
+    return FileResponse(ROOT / 'web' / 'index.html', headers={'Cache-Control': 'no-store'})
+
+
+@router.get('/projects/{asset}')
+async def project_asset(asset: str):
+    if asset not in ('app.js', 'style.css', 'nav.js'):
+        raise HTTPException(404)
+    return FileResponse(ROOT / 'web' / asset, headers={'Cache-Control': 'no-cache'})
