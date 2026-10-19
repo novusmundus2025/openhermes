@@ -302,6 +302,8 @@ def main():
     server.projects = ProjectService(connect, ensure_user, settings, STATE)
     from guided_browser import BrowserService
     server.browser = BrowserService(ensure_user, STATE)
+    from browser_automation import BrowserAutomation
+    server.browser.automation = BrowserAutomation(server.browser, settings, connect)
     from contributions import start_worker
     start_worker(connect, settings.get('contribution_source'))
     server.serve_forever()

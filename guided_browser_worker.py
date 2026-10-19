@@ -58,7 +58,7 @@ def main():
                 raw = current.get('data') or {}
                 url = raw.get('url') or raw.get('value') or raw.get('result') or result.get('url')
                 public_url(url)
-                view = json.loads(browser.browser_snapshot(task_id=task))
+                view = json.loads(browser.browser_snapshot(full=True, task_id=task))
                 if not view.get('success'):
                     raise ValueError('Native snapshot failed')
                 image = None

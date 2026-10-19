@@ -123,6 +123,7 @@ class BrowserService:
     def __init__(self, ensure_user, state, factory=NativeWorker):
         self.ensure_user, self.state, self.factory = ensure_user, Path(state), factory
         self.sessions, self.lock = {}, threading.RLock()
+        self.automation = None
         threading.Thread(target=self.reap, daemon=True).start()
 
     def reap(self):
@@ -133,6 +134,8 @@ class BrowserService:
                 for uid, session in list(self.sessions.items()):
                     if time.monotonic()-session['used'] > 900 and session['lock'].acquire(blocking=False):
                         self.sessions.pop(uid, None)
+                        if self.automation and uid in self.automation.runs:
+                            self.automation.runs.pop(uid)['cancel'].set()
                         expired.append(session)
             for session in expired:
                 try:
@@ -142,14 +145,23 @@ class BrowserService:
                 finally:
                     session['lock'].release()
 
-    def dispatch(self, user, body):
+    def dispatch(self, user, body, actor=None):
         self.ensure_user(user)
         uid, action = user['id'], body.get('action')
+        if action in ('auto_start','auto_status','pause'):
+            if not self.automation:
+                raise ProjectError('AI browser control is unavailable',503)
+            if action=='auto_start':return self.automation.start(user,body)
+            if action=='pause':return self.automation.pause(user)
+            return self.automation.status(user)
+        if action=='stop' and self.automation:
+            self.automation.pause(user)
         if action not in ('start', 'status', 'navigate', 'refresh', 'click', 'type', 'back', 'scroll', 'stop'):
             raise ProjectError('Unsupported browser action')
         with self.lock:
             session = self.sessions.get(uid)
             if action == 'status':
+                if self.automation:return self.automation.status(user)
                 return {'active': bool(session), 'session_id': session['id'] if session else None,
                         'view': session['view'] if session else 0}
             if action == 'start':
@@ -159,11 +171,17 @@ class BrowserService:
                     sid = uuid.uuid4().hex
                     home = self.state / 'guided-browser' / hashlib.sha256(uid.encode()).hexdigest()[:32] / sid
                     session = {'id': sid, 'view': 0, 'used': time.monotonic(), 'lock': threading.Lock(),
-                               'worker': self.factory(home), 'ready': False, 'snapshot': ''}
+                               'worker': self.factory(home), 'ready': False, 'snapshot': '', 'control':'human', 'frame':None}
                     self.sessions[uid] = session
                 return {'active': True, 'session_id': session['id'], 'view': session['view']}
             if not session or body.get('session_id') != session['id']:
                 raise ProjectError('Browser session not found or expired', 404)
+            if actor:
+                run=self.automation.runs.get(uid) if self.automation else None
+                if not run or run['id']!=actor or run['cancel'].is_set() or session['control']!='auto':
+                    raise ProjectError('AI no longer controls this browser',409)
+            elif action!='stop' and session.get('control','human')!='human':
+                raise ProjectError('Pause AI and take human control before acting',409)
             if not session['lock'].acquire(blocking=False):
                 raise ProjectError('A browser operation is already running', 409)
         try:
@@ -173,6 +191,7 @@ class BrowserService:
                 with self.lock:
                     if self.sessions.get(uid) is session:
                         del self.sessions[uid]
+                    if self.automation:self.automation.runs.pop(uid,None)
                 return {'active': False}
             if action in ('click', 'type', 'back', 'scroll') and body.get('view') != session['view']:
                 raise ProjectError('This view is stale. Refresh before acting.', 409)
@@ -205,10 +224,12 @@ class BrowserService:
             session['view'] += 1
             session['ready'] = True
             session['snapshot'] = str(data.get('snapshot', ''))[:80000]
-            return {'active': True, 'session_id': session['id'], 'view': session['view'],
+            frame = {'active': True, 'session_id': session['id'], 'view': session['view'], 'control':session.get('control','human'),
                     'url': data['url'], 'title': str(data.get('title', ''))[:500],
                     'snapshot': session['snapshot'], 'image': data.get('image'),
                     'warning': data.get('warning')}
+            session['frame']=frame
+            return frame
         except ProjectError as exc:
             if exc.status >= 500:
                 session['worker'].close()
@@ -224,3 +245,4 @@ class BrowserService:
             raise ProjectError('Browser worker failed. Stop and restart this session.', 503)
         finally:
             session['lock'].release()
+            if session.get('control')=='pausing':session['control']='human'

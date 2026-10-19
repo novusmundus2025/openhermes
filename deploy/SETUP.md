@@ -22,7 +22,7 @@
    Contribution imports are off until devices are explicitly linked.
 10. Plans/checkpoints live in `.hermes-project/`, with root `AGENTS.md` for discovery.
     Agent tasks attempt local Git checkpoint commits. Remote pushes are separate.
-11. The manual Guided Browser at `/guided-browser/` uses native Hermes tools through
+11. The Guided Browser at `/guided-browser/` uses native Hermes tools through
     `/api/openhermes/browser/action`. Open WebUI injects the approved user's identity;
     sessions, screenshots and controls are owner-scoped. It needs no separate
     browser:8077, broker:8088 or public VNC service. Autopilot and secure graphical
@@ -190,3 +190,30 @@ Model context metering and warnings are not implemented in the UI. Server-side
 browser automation exists, but secure human browser-login handoff is not integrated.
 No public tunnel or company OAuth is enabled by this guide. Ports 8642 and 8643
 must remain private; the bridge trusts Open WebUI's injected identity.
+
+## Guided Browser Function
+
+After updating the bridge and Guided Browser assets, install the complete Function:
+
+```sh
+python3 deploy/install_openwebui_pipe.py --guided-browser
+python3 deploy/install_openwebui_pipe.py --guided-browser --check
+```
+
+Select **Hermes Guided Browser — Ehda** in a new chat. Example:
+`Open https://example.com and report the page heading.` Use `/pause` to take
+human control, `/continue` to resume the previous task, `/status` to inspect progress,
+and `/close` to clear the session. Login is performed in `/guided-browser/`, never
+through chat. AI stops on detected login/verification pages and recognized
+state-changing controls. The human lane is reference-based fill/click, not a noVNC
+desktop; complex CAPTCHA/SSO flows may require additional browser support.
+
+Default valves: `BROWSER_URL=http://172.17.0.1:8643`,
+`EXEC_MODEL=mundusx-agnostic`, `MAX_STEPS=10`, `LEGEND_MAX=25`,
+`WORKSPACE_URL=/guided-browser/`. The bridge key comes from its private container
+configuration. Separate `BROKER_URL` and `NOVNC_URL` services are not needed.
+Model usage is recorded against the authenticated user through the existing ledger.
+AI requests have a bounded provider timeout; pausing blocks late browser actions
+but does not cancel inference already running upstream. Sessions expire after
+15 minutes idle, and cookies persist only within that live private session.
+Configure HTTPS before public use or login over untrusted networks.

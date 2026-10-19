@@ -1,6 +1,6 @@
 # OpenHermes
 
-The manual Guided Browser is at `/guided-browser/` (also linked in the Open WebUI
+The Guided Browser is at `/guided-browser/` (also linked in the Open WebUI
 sidebar after refresh). It uses authenticated owner-scoped sessions and native
 Hermes browser tools, with screenshots, current element references, click/fill,
 back/scroll, and explicit stop. Each session has a separate Hermes runtime and
@@ -8,11 +8,22 @@ sandbox; it does not attach to an existing regular-chat browser or its cookies.
 There are four guided slots and a 15-minute inactivity expiry. Stop removes that
 session's sandbox and private runtime. Backend restarts close child browser workers;
 runtime-directory recovery after an abnormal host crash remains operator-managed.
-No AI autopilot, reusable workflow recording or noVNC takeover is included yet.
+Bounded AI control uses the configured Ehda model, with a default ten-action budget
+and a ten-minute run limit. Login/verification and recognized state-changing controls
+hand back to human control. Pause discards pending model actions; an already-running
+browser action finishes before human control becomes available.
+The `Hermes Guided Browser — Ehda` Open WebUI Function drives the same session.
+Install it with `python3 deploy/install_openwebui_pipe.py --guided-browser`.
+Use a task with a public URL, then `/continue` after completing login in the workspace.
+There is no reusable workflow recorder or full noVNC desktop takeover yet.
 Public HTTP(S) URLs are validated; internal/LAN URLs and arbitrary JavaScript/shell
 commands are not accepted. This URL validation is not a network-level egress firewall.
 Typed input is not stored in the bridge DB or chat; native runtime cleanup still
-matters for website cookies/history. Do not claim secure browser-login handoff.
+matters for website cookies/history. AI receives text snapshots with input values
+removed; screenshots stay in the authenticated workspace. Human control uses
+reference-based fill/click controls. Use HTTPS before exposing this service publicly
+or entering credentials across an untrusted connection. State-changing control
+detection is conservative label-based checking, not a guarantee for arbitrary sites.
 
 For the complete multi-user setup sequence and runnable deployment scripts, see
 [deploy/SETUP.md](deploy/SETUP.md). Existing installations should use its update

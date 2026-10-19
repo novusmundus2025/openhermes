@@ -13,6 +13,8 @@ from pathlib import Path
 from urllib.request import Request,urlopen
 from urllib.error import HTTPError
 payload=json.load(sys.stdin)
+fid=payload.get('function_id','hermes_profiles')
+name=payload.get('function_name','Hermes User Profiles')
 os.environ['WEBUI_SECRET_KEY']=Path('/app/backend/.webui_secret_key').read_text().strip()
 from open_webui.utils.auth import create_token
 db=sqlite3.connect('/app/backend/data/webui.db')
@@ -28,10 +30,11 @@ def api(path,data=None):
         data=json.dumps(data).encode() if data is not None else None,
         headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
     with urlopen(req,timeout=60) as response:return json.load(response)
-try: current=api('functions/id/hermes_profiles')
-except HTTPError as error:
-    if error.code!=404: raise SystemExit('Cannot inspect Hermes Pipe: HTTP '+str(error.code))
-    current=None
+# Some Open WebUI versions return 401 for a missing function ID. Inspect the
+# administrator's function list first so a missing item is not confused with auth.
+existing=api('functions/')
+current=next((item for item in existing if item.get('id')==fid),None)
+if current:current=api('functions/id/'+fid)
 if payload['check']:
     print(json.dumps({'installed':bool(current),'active':bool(current and current.get('is_active'))}))
     raise SystemExit(0)
@@ -44,16 +47,16 @@ if config_path.exists():
     (backup_dir/('bridge-'+str(time.time_ns())+'.json')).write_bytes(config_path.read_bytes())
 config_path.write_text(json.dumps(payload['bridge']))
 config_path.chmod(0o600)
-form={'id':'hermes_profiles','name':'Hermes User Profiles','content':payload['source'],'meta':{'description':'Authenticated per-user native Hermes profiles'}}
-result=api('functions/id/hermes_profiles/update' if current else 'functions/create',form)
-if not result.get('is_active'):api('functions/id/hermes_profiles/toggle',{})
+form={'id':fid,'name':name,'content':payload['source'],'meta':{'description':'Authenticated per-user native Hermes profiles'}}
+result=api('functions/id/'+fid+'/update' if current else 'functions/create',form)
+if not result.get('is_active'):api('functions/id/'+fid+'/toggle',{})
 # Preserve existing model grants and add read access for approved authenticated users.
 grants=[dict(zip(('principal_type','principal_id','permission'),row)) for row in db.execute(
-    "SELECT principal_type,principal_id,permission FROM access_grant WHERE resource_type='model' AND resource_id='hermes_profiles'")]
+    "SELECT principal_type,principal_id,permission FROM access_grant WHERE resource_type='model' AND resource_id=?",(fid,))]
 public={'principal_type':'user','principal_id':'*','permission':'read'}
 if public not in grants:grants.append(public)
-api('models/model/access/update',{'id':'hermes_profiles','name':'Hermes User Profiles','access_grants':grants})
-print('Hermes User Profiles enabled for approved authenticated users. Existing grants preserved.')
+api('models/model/access/update',{'id':fid,'name':name,'access_grants':grants})
+print(name+' enabled for approved authenticated users. Existing grants preserved.')
 print('No account roles, default models or legacy model connections changed.')
 '''
 
@@ -62,12 +65,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--container', default='open-webui')
     parser.add_argument('--admin-id', help='Required when more than one administrator exists')
+    parser.add_argument('--guided-browser', action='store_true', help='Install the Guided Browser Function instead of the standard profiles Pipe')
     parser.add_argument('--check', action='store_true', help='Read-only installation/activation check')
     args = parser.parse_args()
-    payload = {'admin_id': args.admin_id, 'check': args.check}
+    payload = {'admin_id': args.admin_id, 'check': args.check,
+               'function_id':'hermes_guided_browser' if args.guided_browser else 'hermes_profiles',
+               'function_name':'Hermes Guided Browser — Ehda' if args.guided_browser else 'Hermes User Profiles'}
     if not args.check:
         settings = json.loads((ROOT / 'settings.json').read_text())
-        payload.update(source=(ROOT / 'openwebui_pipe.py').read_text(),
+        payload.update(source=(ROOT / ('openwebui_guided_browser.py' if args.guided_browser else 'openwebui_pipe.py')).read_text(),
                        bridge={'url': 'http://172.17.0.1:8643', 'key': settings['bridge_key']})
     subprocess.run(['docker', 'exec', '-i', '-e', 'PYTHONPATH=/app/backend',
                     args.container, 'python', '-c', CONTAINER_SCRIPT],
