@@ -1,0 +1,13 @@
+# NEW installations only. Do not replace an existing Open WebUI data volume.
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui@sha256:4860ba005ae8f19f08d1e12b0868855b7b339ea0dad9927f196820fc0de04575
+    container_name: open-webui
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui:/app/backend/data
+    restart: unless-stopped
+volumes:
+  open-webui:
+    name: open-webui

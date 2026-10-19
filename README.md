@@ -1,5 +1,9 @@
 # OpenHermes
 
+For the complete multi-user setup sequence and runnable deployment scripts, see
+[deploy/SETUP.md](deploy/SETUP.md). Existing installations should use its update
+section rather than generating new secrets.
+
 Project memory: AGENTS.md records instructions, .hermes-project/PLAN.md records the agent's plan,
 and .hermes-project/CHECKPOINT.md records its verified summary. Existing documents are preserved
 when initializing projects. Each agent task independently writes .hermes-project/tasks/TASK-<id>.md with

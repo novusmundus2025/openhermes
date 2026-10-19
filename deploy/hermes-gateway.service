@@ -1,0 +1,15 @@
+[Unit]
+Description=Native Hermes multiplexed gateway
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=%h/.local/bin/hermes -p default gateway run
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=default.target

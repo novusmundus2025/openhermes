@@ -31,6 +31,8 @@ def provision(profile):
     config = yaml.safe_load((home / "config.yaml").read_text()) or {}
     # MundusX streaming currently omits usage; non-streaming returns runtime tokens.
     config.setdefault('model', {})['streaming'] = False
+    if settings.get('model'):
+        config['model']['default'] = settings['model']
     config['model']['base_url'] = 'http://172.17.0.1:8643/provider/' + profile + '/v1'
     config['model'].pop('api_key', None)
     config['model']['key_env'] = 'OPENHERMES_MODEL_KEY'
