@@ -50,6 +50,15 @@ class AutomationTests(unittest.TestCase):
         run=self.launch();run['thread'].join(2)
         self.assertEqual(run['state'],'human_required')
         self.assertEqual(self.auto.status(self.user)['control'],'human')
+    def test_cardmarket_block_stops_without_model_or_inbox_claim(self):
+        self.browser.sessions['alice']['frame'].update(title='Attention Required! | Cloudflare',
+            snapshot='- heading "Sorry, you have been blocked" [level=1, ref=e1]\n- heading "You are unable to access cardmarket.com" [level=2, ref=e2]')
+        self.engine(lambda *args:self.fail('Blocked page must not be sent to model'))
+        run=self.launch();run['thread'].join(2)
+        self.assertEqual(run['state'],'site_blocked');self.assertEqual(run['steps'],0)
+        self.assertIn('could not proceed',run['summary'])
+        self.assertEqual(self.auto.status(self.user)['control'],'human')
+
     def test_pause_discards_pending_model_result_and_allows_human_fill(self):
         entered=threading.Event();release=threading.Event()
         def planner(*args):

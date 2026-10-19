@@ -38,8 +38,15 @@ def model_snapshot(snapshot):
 def login_required(frame):
     path=urlsplit(frame.get('url','')).path.lower()
     snapshot=frame.get('snapshot','')
-    return bool(re.search(r'/(login|signin|sign-in|log-in|oauth|authorize)(/|$)', path)
+    return bool(re.search(r'checking your browser|verify you are human|performing security verification|just a moment',str(frame.get('title',''))+'\n'+snapshot,re.I)
+                or re.search(r'/(login|signin|sign-in|log-in|oauth|authorize)(/|$)', path)
                 or re.search(r'(textbox|input)[^\n]*(password|passcode|one.time|verification.code|security.code|captcha)',snapshot,re.I))
+
+
+def site_blocked(frame):
+    headings='\n'.join(line for line in str(frame.get('snapshot','')).splitlines() if re.search(r'\bheading\b',line,re.I))
+    text=str(frame.get('title',''))+'\n'+headings
+    return bool(re.search(r'sorry,? you have been blocked|you are unable to access|access denied|request blocked',text,re.I))
 
 
 def safe_step(plan, frame):
@@ -193,6 +200,9 @@ class BrowserAutomation:
                     if run['cancel'].is_set() or not session or session['id']!=run['session_id'] or session.get('control')!='auto':return
                     frame=dict(session.get('frame') or {})
                     view=session['view']
+                if site_blocked(frame):
+                    run.update(state='site_blocked',summary="The website's security service blocked this server browser. Login and inbox access could not proceed. Check access in your own browser or contact the website; retrying the AI task will not resolve this block.")
+                    return
                 if login_required(frame):
                     run.update(state='human_required',summary='Login or verification detected. AI is paused. Use human control in the browser workspace; resume only after signing in.')
                     return

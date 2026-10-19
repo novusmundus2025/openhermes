@@ -57,18 +57,25 @@ def main():
                 current = browser._session._run_browser_command(key, 'get', ['url'])
                 raw = current.get('data') or {}
                 url = raw.get('url') or raw.get('value') or raw.get('result') or result.get('url')
+                if not isinstance(url,str) or not url.startswith(('https://','http://')):
+                    response={'success':False,'error':'The browser did not reach a website. Navigation failed or the browser session reset before its page could be read. No login or inbox access occurred.'}
+                    output.write(json.dumps(response)+'\n');output.flush()
+                    continue
                 public_url(url)
                 view = json.loads(browser.browser_snapshot(full=True, task_id=task))
                 if not view.get('success'):
                     raise ValueError('Native snapshot failed')
                 image = None
                 warning = None
+                from browser_automation import site_blocked
+                if site_blocked({'title':view.get('title') or result.get('title',''),'snapshot':view.get('snapshot','')}):
+                    warning="The website's security service blocked this server browser. Login and inbox access are unavailable on this page."
                 with tempfile.TemporaryDirectory(prefix='openhermes-view-') as directory:
                     _, screenshot, error = browser._capture_vision_screenshot(key, True, Path(directory)/'view.png', False)
                     if not error and screenshot.is_file() and screenshot.stat().st_size <= 6*1024*1024:
                         image = 'data:image/png;base64,' + base64.b64encode(screenshot.read_bytes()).decode()
                     else:
-                        warning = 'Screenshot unavailable; use the element snapshot.'
+                        warning = (warning+' ' if warning else '')+'Screenshot unavailable; use the element snapshot.'
                 response = {'success': True, 'url': url, 'title': view.get('title') or result.get('title', ''),
                             'snapshot': view.get('snapshot', ''), 'image': image, 'warning': warning}
             except Exception:

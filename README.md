@@ -25,6 +25,12 @@ reference-based fill/click controls. Use HTTPS before exposing this service publ
 or entering credentials across an untrusted connection. State-changing control
 detection is conservative label-based checking, not a guarantee for arbitrary sites.
 
+Website security blocks are reported as `site_blocked`, before any model call.
+The current GX10 browser received Cardmarket's Cloudflare "Sorry, you have been
+blocked" page during testing. This prevents login and inbox access; adding a broker
+or retrying the AI task does not fix site access. Verification challenges hand back
+to human control. The integration does not bypass website security checks.
+
 For the complete multi-user setup sequence and runnable deployment scripts, see
 [deploy/SETUP.md](deploy/SETUP.md). Existing installations should use its update
 section rather than generating new secrets.
