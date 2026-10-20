@@ -31,6 +31,13 @@ class ProjectBoundaryTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_export_is_owner_scoped_and_blocks_active_edits(self):
+        with self.assertRaises(ProjectError):self.service.dispatch({'id':'bob'},{'action':'export','project_id':'project-a'})
+        with self.connect() as db:
+            db.execute("INSERT INTO project_jobs VALUES (?,?,?,?,?,?,?,?,?,?,?)",('export-busy','project-a','agent','x','running','','[]',None,1,1,'legacy'))
+        with self.assertRaises(ProjectError) as caught:self.service.dispatch({'id':'alice'},{'action':'export','project_id':'project-a'})
+        self.assertEqual(caught.exception.status,409)
+
     def test_project_delete_owner_and_running_guard(self):
         base = {'action':'delete_project','project_id':'project-a'}
         with self.assertRaises(ProjectError):

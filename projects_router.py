@@ -133,6 +133,21 @@ async def project_file():
 
 @router.get('/projects/{asset}')
 async def project_asset(asset: str):
-    if asset not in ('app.js', 'style.css', 'nav.js', 'guided.js', 'guided.css', 'file.js'):
+    if asset not in ('app.js', 'style.css', 'nav.js', 'guided.js', 'guided.css', 'file.js', 'download.js'):
         raise HTTPException(404)
     return FileResponse(ROOT / 'web' / asset, headers={'Cache-Control': 'no-cache'})
+
+
+@router.get('/api/openhermes/projects/{project_id}/download')
+async def project_download(project_id: str, user=Depends(get_verified_user)):
+    if user.role not in ('admin','user'):raise HTTPException(403,'Account approval is required')
+    data=await forward(user,{'action':'export','project_id':project_id})
+    return Response(base64.b64decode(data['data']),media_type='application/zip',headers={
+        'Content-Disposition':'attachment; filename="'+data['filename']+'"',
+        'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+
+
+@router.get('/project-download/')
+async def download_page():
+    return FileResponse(ROOT/'web'/'download.html',headers={'Cache-Control':'no-store',
+        'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'self'"})

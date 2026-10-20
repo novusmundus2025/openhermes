@@ -458,6 +458,12 @@ class ProjectService:
             return {'project': self.create(user, profile, payload.get('name'), payload.get('repository'))}
         project = self.project(user['id'], payload.get('project_id'))
         root = project['root']
+        if action == 'export':
+            with self.connect() as db:
+                if db.execute("SELECT 1 FROM project_jobs WHERE project_id=? AND state IN ('queued','running')",(project['id'],)).fetchone():
+                    raise ProjectError('Wait for the current task to finish before downloading',409)
+            from project_export import export_project
+            return export_project(project)
         if action == 'delete_project':
             with self.connect() as db:
                 db.execute('BEGIN IMMEDIATE')

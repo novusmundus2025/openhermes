@@ -223,6 +223,7 @@ class CoderFunctionTests(unittest.TestCase):
         result=result_message({'project_id':'p','state':'workspace','workspace':'/actual/user/project'},show_workspace=True)
         self.assertIn('/actual/user/project',result)
         self.assertNotIn('<details',result)
+        self.assertIn('[Download code ZIP](/project-download/?project_id=p)',result)
     def test_install_output_is_not_mislabeled_as_verification_or_dumped_in_chat(self):
         result=result_message({'project_id':'p','verified':False,'commands':[{'command':'cd /workspace && npm install','exit_code':0,'output':'npm warning '+('noisy details '*1000)}]})
         self.assertIn('Latest command',result);self.assertNotIn('Latest check',result)

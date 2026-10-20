@@ -18,6 +18,16 @@ def conversation_id(body, metadata):
     return (metadata or {}).get('chat_id') or (body.get('metadata') or {}).get('chat_id') or body.get('chat_id')
 
 
+def user_context(messages):
+    boundary=max((i for i,m in enumerate(messages[:-1]) if m.get('role')=='user' and m.get('content')=='/new-session'),default=-1)
+    result=[]
+    for message in messages[max(boundary+1,len(messages)-7):-1]:
+        content=message.get('content')
+        if message.get('role')=='user' and isinstance(content,str) and not content.strip().startswith('/'):
+            result.append('user: '+content[:1500])
+    return '\n'.join(result)[-6000:]
+
+
 def display_text(value):
     return html.unescape(str(value or '')).replace('Â·','·')
 
@@ -49,6 +59,7 @@ def result_message(data, show_workspace=False):
         else:
             text+='\n\nNext: open the execution log to inspect the remaining checks.'
     text+='\n\n[Open project & execution log]('+project+')'
+    text+=' · [Download code ZIP](/project-download/?project_id='+pid+')'
     shown=changed or files
     if shown:
         text+='\n\n**'+('Saved changes' if changed else 'Project files')+' · '+str(len(shown))+'**\n\n'
@@ -61,9 +72,11 @@ def result_message(data, show_workspace=False):
     commands=data.get('commands') or []
     if commands:
         # Put full request/output history in the project log; keep the latest real result readable.
-        latest=commands[-1]
+        check_pattern=r'(?:^|&&|;)\s*(?:npm\s+(?:test\b|run\s+(?:test|lint|build|check)\b)|node\b|python[3]?\b|pytest\b|cargo\s+(?:test|check)\b|go\s+test\b|curl\b)'
+        checks=[c for c in commands if re.search(check_pattern,display_text(c.get('command','')))]
+        latest=(checks or commands)[-1]
         command=display_text(latest.get('command',''))
-        check=bool(re.search(r'(?:^|&&|;)\s*(?:npm\s+(?:test\b|run\s+(?:test|lint|build|check)\b)|node\b|python[3]?\b|pytest\b|cargo\s+(?:test|check)\b|go\s+test\b|curl\b)',command))
+        check=bool(checks)
         text+='\n\n**'+('Latest check' if check else 'Latest command')+'** · '+inline(command)+' · Exit code: '+str(latest.get('exit_code'))
         output=display_text(latest.get('output')).strip()
         if output and (check or latest.get('exit_code') not in (0,None) or latest.get('is_error')):
@@ -214,13 +227,9 @@ class Pipe:
                     final_status='Git connection / operation requested'
                     yield 'Use the [secure Git connection and operation form](/git-connect/?'+urlencode(params)+'). Your saved connection is reused; if needed, connect there and run the operation. Never paste a token into chat. The form shows the repository and branch before execution.'
                     return
-                history=[]
-                for message in messages[-7:-1]:
-                    if message.get('role') in ('user','assistant') and isinstance(message.get('content'),str):
-                        history.append(message['role']+': '+message['content'][:1500])
                 if __event_emitter__:
                     await __event_emitter__({'type':'status','data':{'description':'Selecting project and preparing task…','done':False}})
-                started=await api({'action':'start','conversation_id':cid,'request_id':uuid.uuid4().hex,'prompt':latest,'context':'\n'.join(history)[-6000:]})
+                started=await api({'action':'start','conversation_id':cid,'request_id':uuid.uuid4().hex,'prompt':latest,'context':user_context(messages)})
                 if started.get('state')=='choose_project':
                     final_status='Choose a project'
                     yield started['answer']+'\n\n'+ '\n'.join('- '+inline(p['name'])+' — reply '+inline('/use-project '+(p['name'] if sum(q['name'].casefold()==p['name'].casefold() for q in started['projects'])==1 else p['id'])) for p in started['projects'])+'\n\nOr reply `/new-project Your project name` to start separately. I’ll then run your original task.'
