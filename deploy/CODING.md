@@ -48,22 +48,105 @@ and file.js into Open WebUI. Restart the bridge and Open WebUI while idle, then 
 configuration and preserves the SuperCoder preset's name/metadata/access while
 changing its base model to `hermes_coder`. Old chat messages are not rewritten.
 
-Tests: `python -m unittest test_coding test_agent_contracts`. The provider adapter retries a tool-calls finish reason with no actual call once,
-then converts it to a verified protocol failure rather than displaying success
-prose. Each inference HTTP call is capped at 90 seconds within the existing
-600-second agent budget. Runtime integration also requires native Hermes, Docker
-and an available inference provider.
+Tests: `python -m unittest test_coding test_provider_tools test_agent_contracts`.
+Native integration also requires Hermes, Docker and a functioning inference provider.
+The 600-second job budget and 16-turn limit remain in place. Individual buffered
+provider calls allow 180 seconds so larger code responses do not trigger premature
+retries. Missing output budgets default to 4096 tokens; explicit client budgets are
+preserved. Project context is capped at 65,536 tokens, which meets Hermes’s 64K
+minimum. The cap reduces memory pressure but does not guarantee arbitrary models fit.
 
+A new Open WebUI chat no longer implies a new project. Distinctive project-name
+words select a unique owned project; follow-ups retain the mapped project.
+Ambiguous requests and requests to build a different application pause before
+execution. Reply `/use-project Project name` (or its ID for duplicate names) or
+`/new-project New name`; the pending original task then runs. These are conservative
+name/context rules, not an inference-based semantic classifier. Existing files
+and mappings are preserved.
 
-Project routing: a new Open WebUI chat no longer implies a new project. Distinctive project-name words select a unique owned project; follow-ups retain the mapped project. Ambiguous requests and requests to build a different application pause before execution. Reply `/use-project Project name` (or its ID for duplicate names) or `/new-project New name`; the pending original task then runs. A new account with no projects gets its first workspace automatically. These are conservative name/context rules, not an inference-based semantic classifier. Existing mappings and project files are preserved.
+Automatic project names use one bounded request to the configured model (15 seconds,
+80 output tokens). Only validated short names are accepted; failure uses a concise
+local fallback. Explicit short names are preserved. Naming usage is recorded through
+the existing credit tracker. Existing workspace paths are not moved automatically.
 
-Automatic new-project names use one bounded request to the configured model (15 seconds, 80 output tokens). Only validated short names are accepted. Failure uses a concise local fallback; explicit short `/new-project` names are preserved. Naming usage is recorded through the existing credit tracker. Existing workspace paths are not moved automatically.
+Progress emits a six-second heartbeat: elapsed time, time since activity, tool-result
+and failure counts, and the pending tool target. Tool-result events are persisted
+immediately rather than waiting for the next model response. Final replies show the
+latest actual check rather than a later cleanup command. No percentage is invented.
 
+Completion validation checks requested artifacts, observed code files and actual
+successful checks. Test-pass claims need a recorded successful test command.
+Explicit JavaScript handler-preservation requests also compare named functions
+before and after the task; this is a conservative structural check, not a full
+semantic equivalence proof. Dot-relative paths normalize to the same saved file.
+Old assistant claims are excluded from historical context. `/new-session` also
+starts a history boundary so earlier user tasks are not reintroduced.
 
-SuperCoder progress now emits a status heartbeat every six seconds with elapsed time, time since the last event, completed tool-result count, failure count, and the currently pending tool target. It does not invent percentages or stream unverified success claims.
+For explicit patch-only instructions, whole-file writes are withheld and terminal
+calls are restricted to listed read/check commands. Native structured calls and
+text-envelope calls must match offered tools and enum arguments before Hermes can
+execute them. This blocks common shell-write fallbacks; it is not a security sandbox
+for arbitrary user-authored test programs. Existing read-before-write protections,
+container isolation and bounded file-edit recovery remain enabled.
 
-A provider-specific failure was reproduced on 2026-10-20: ordinary text completions returned HTTP 200, but native tool completions returned upstream HTTP 502 with an internal completion endpoint HTTP 404. The bridge maps this exact missing-dependency signature to HTTP 424 so Hermes does not spend minutes retrying a missing route. Other provider failures retain their status. Only a fixed, safe diagnostic is returned; raw provider error bodies are not exposed. The final chat explains the dependency failure and keeps the same project available for retry.
+MundusX coding requests keep source-copy repetition penalties neutral. Its MLX
+profile originally recognized VS Code’s file tools but missed Hermes’s `patch`
+name. Coding requests require actual tool work until an observed check succeeds;
+ordinary read-only requests retain normal final-answer behavior. Unexecuted code
+prose is never evidence that a program was saved.
 
-Validation on GX10: 15 server tests, 22 coding/function tests, and 51 Git/recovery/project/provider tests passed. Browser tests verified the elapsed-time status history, clear dependency failure, `/result`, secure `/git` routing, and public clone/fetch/fast-forward pull using octocat/Hello-World in the separate Git Regression project. An isolated execution fixture also passed Node code creation, code update, validation checks, two commits, a feature branch, fast-forward merge, push to a temporary local bare repository, and clone/read-back. No company remote was modified. Private push/PR was not exercised: the current HTTP deployment has no saved connection and correctly disables token entry.
+## Mac contributor recovery
 
-This does **not** establish successful end-to-end Hermes code generation: the real provider dependency is still unavailable. A text-only protocol workaround was tested, produced malformed/unreliable output, and was discarded. Repair the native tool endpoint on the inference-provider server before rerunning real agent creation, edit, tests, and checkpoint validation.
+The investigated HTTP 502/internal HTTP 404 was caused by a Metal out-of-memory
+error that killed MLX’s generation thread, not a missing URL. `/v1/models` still
+returned 200. The bridge now reports the failed dependency without exposing raw
+upstream errors or claiming a missing route.
+
+The Mac node runs in GUI launchd domain `ai.mundusx.node-agent`, with its existing
+identity and an absolute `OPENGPU_HOME`. This lets macOS Keychain supply the existing
+signing secret; launching the same agent from SSH produced invalid signatures.
+No new contributor identity or credit ownership was created.
+
+`deploy/mlx_runtime_health.py <installed mlx_lm/server.py>` applies a backup-first,
+idempotent patch for the inspected MLX version: dead generation threads make model
+discovery return 503, prompt/decode concurrency default to one, prefill steps default
+to 512, and reusable allocator cache is limited to 1 GiB. The node’s `max_jobs` is one.
+The generated `measured_startup.py` wrapper is overwritten by the node agent, so the
+patch targets installed `mlx_lm/server.py`. Recheck it after an MLX upgrade.
+
+`deploy/mac_runtime_watchdog.py` runs through GUI LaunchAgent
+`ai.mundusx.runtime-watchdog`. It checks local runtime health every ten seconds,
+recovers after three explicit dead-worker responses or six network failures,
+allows cold startup five minutes, and enforces a five-minute recovery cooldown.
+It respects paused/disconnected configuration, verifies the worker PID/owner/command
+before signaling, and restarts the existing GUI agent without reading credentials.
+Use `launchctl bootout gui/$(id -u)/ai.mundusx.runtime-watchdog` and the corresponding
+node-agent service when intentionally disabling managed contribution.
+
+Cluster-wide admission based on actual free memory and automatic failover to another
+contributor still require control-plane work and validation. Local recovery does not
+establish multi-node failover. Do not count failed inference as a successful code edit.
+
+## Integration validation
+
+Browser testing exercised project reuse from a second chat, actual native file tools,
+progress, failed checks, result retrieval, secure Git routing and public
+clone/fetch/fast-forward pull in a separate Git Regression project. An isolated Git
+fixture exercised code updates, two commits, branch/merge, a local bare-remote push
+and clone. No company remote was modified. Private push/PR was not exercised because
+this HTTP deployment has no saved connection and disables token entry.
+
+The generated enrollment application required manual repair: complete handlers were
+recovered from a recorded successful native write, then the collection GET guard,
+data-directory creation, startup sequencing and HTTP suite were repaired. The
+project contains an explicit manual-repair record and local Git checkpoint. Its
+HTTP suite passed eight tests; `deploy/verify_enrollment.js` passed 23 independent
+HTTP/persistence checks in a read-only container. This does not establish that the
+model can autonomously complete arbitrary applications. Passing a syntax/import
+check alone does not prove the requested API is functional.
+
+Runtime recovery now pauses contributor assignments before terminating an unhealthy MLX worker, waits for memory release, and launches the same validated runtime command. It resumes only after a nonempty generation probe. Failed recovery stays paused. Manual pauses or configuration changes during recovery are preserved. This does not reassign or retry interrupted control-plane jobs.
+
+Stalled inference: runtime health returns 503 when a GPU batch is blocked for over 120 seconds or an active completion exceeds 240 seconds. Three failed watchdog observations trigger pause/recovery. Idle workers are excluded; requests are removed from tracking even on errors. These are bounded operational deadlines, not proof of a GPU fault.
+
+For a verified Qwen3-Coder MLX upstream with the installed OpenGPU native guard, set `model_tool_profile` to `qwen3-coder-mlx` in private settings. This opts Hermes read_file/patch/terminal requests into serial native tool termination and registered-name opening; other providers remain unchanged. Do not enable this on an unverified backend. After an observed check fails, the bridge permits a final blocker report rather than forcing repeated tool calls; failed checks still cannot certify completion.

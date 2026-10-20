@@ -1,6 +1,6 @@
 import json
 import unittest
-from provider_tools import normalize_tools, invalid_tool_protocol, completion_with_retry
+from provider_tools import normalize_tools, invalid_tool_protocol, completion_with_retry, coding_tool_policy, scoped_edit_policy, native_tool_profile
 from unittest.mock import Mock
 
 
@@ -11,6 +11,70 @@ class ProviderToolTests(unittest.TestCase):
 
     def response(self, text):
         return {'choices': [{'message': {'role': 'assistant', 'content': text}, 'finish_reason': 'stop'}]}
+
+    def test_failed_verification_can_be_reported_instead_of_forcing_more_tools(self):
+        request={'tools':[{'function':{'name':'terminal'}},{'function':{'name':'write_file'}}],
+                 'messages':[{'role':'user','content':'Fix the application and run tests'},
+                   {'role':'assistant','tool_calls':[{'id':'a','function':{'name':'terminal','arguments':'{"command":"npm test"}'}}]},
+                   {'role':'tool','tool_call_id':'a','content':'{"exit_code":1,"output":"Database unavailable"}'}]}
+        self.assertIs(coding_tool_policy(request),request)
+
+    def test_native_guard_is_opt_in_and_preserves_request(self):
+        request={'tools':[{'function':{'name':name}} for name in ['read_file','patch','terminal']],
+                 'chat_template_kwargs':{'other':True}}
+        self.assertIs(native_tool_profile(request),request)
+        result=native_tool_profile(request,'qwen3-coder-mlx')
+        self.assertFalse(result['parallel_tool_calls'])
+        self.assertTrue(result['chat_template_kwargs']['opengpu_native_tool_guard'])
+        self.assertTrue(result['chat_template_kwargs']['other'])
+        self.assertNotIn('opengpu_native_tool_guard',request['chat_template_kwargs'])
+        self.assertIs(native_tool_profile(dict(request,parallel_tool_calls=True),'qwen3-coder-mlx').get('parallel_tool_calls'),True)
+        other={'tools':[{'function':{'name':'browser'}}]}
+        self.assertIs(native_tool_profile(other,'qwen3-coder-mlx'),other)
+
+    def test_coding_policy_requires_actions_until_a_real_check(self):
+        request={'tools':[{'function':{'name':'terminal'}},{'function':{'name':'write_file'}}],
+                 'messages':[{'role':'user','content':'Implement API server.js'}]}
+        self.assertEqual(coding_tool_policy(request)['tool_choice'],'required')
+        self.assertNotIn('tool_choice',request)
+        request['messages'] += [{'role':'assistant','tool_calls':[{'id':'a','function':{'name':'terminal','arguments':'{"command":"node --check server.js"}'}}]},
+                                {'role':'tool','tool_call_id':'a','content':'{"exit_code":0}'}]
+        self.assertNotIn('tool_choice',coding_tool_policy(request))
+        request['messages'][0]['content']='Implement API server.js and tests'
+        self.assertEqual(coding_tool_policy(request)['tool_choice'],'required')
+        request['messages'][0]['content']='Explain the README'
+        self.assertNotIn('tool_choice',coding_tool_policy(request))
+        request['tool_choice']='none'
+        self.assertEqual(coding_tool_policy(request)['tool_choice'],'none')
+
+    def test_explicit_patch_only_request_cannot_offer_whole_file_write(self):
+        request={'messages':[{'role':'user','content':'Fix server.js; patch only the final block'}],
+                 'tools':[{'function':{'name':'write_file'}},{'function':{'name':'patch'}},{'function':{'name':'terminal'}}]}
+        scoped=scoped_edit_policy(request)
+        self.assertNotIn('write_file',[t['function']['name'] for t in scoped['tools']])
+        self.assertEqual(len(request['tools']),3)
+        self.assertEqual(coding_tool_policy(scoped)['tool_choice'],'required')
+
+    def test_unoffered_native_tool_cannot_escape_scope(self):
+        response={'choices':[{'message':{'tool_calls':[{'id':'a','function':{'name':'terminal','arguments':'{}'}}]},'finish_reason':'tool_calls'}]}
+        normalized=normalize_tools(response,self.request())
+        self.assertEqual(normalized['choices'][0]['message']['tool_calls'],[])
+        self.assertIn('unoffered tool',normalized['choices'][0]['message']['content'])
+
+    def test_patch_only_terminal_cannot_write_through_shell(self):
+        request={'messages':[{'role':'user','content':'Fix server.js; patch only final block; check import'}],
+                 'tools':[{'function':{'name':'terminal','parameters':{'properties':{'command':{'type':'string'}}}}}]}
+        scoped=scoped_edit_policy(request)
+        command=scoped['tools'][0]['function']['parameters']['properties']['command']
+        self.assertIn('node --check server.js',command['enum'])
+        response={'choices':[{'message':{'tool_calls':[{'function':{'name':'terminal','arguments':json.dumps({'command':'echo replacement > server.js'})}}]},'finish_reason':'tool_calls'}]}
+        self.assertEqual(normalize_tools(response,scoped)['choices'][0]['message']['tool_calls'],[])
+
+    def test_read_only_scope_withholds_both_file_mutators(self):
+        request={'messages':[{'role':'user','content':'Read-only. Do not edit, create or delete files. Run npm test.'}],
+                 'tools':[{'function':{'name':name}} for name in ['write_file','patch','terminal','read_file']]}
+        scoped=scoped_edit_policy(request)
+        self.assertEqual([t['function']['name'] for t in scoped['tools']],['terminal','read_file'])
 
     def test_native_hermes_receives_a_real_structured_tool_call(self):
         result = normalize_tools(self.response('<function=write_file>\n<parameter=path>\n/workspace/index.html\n</parameter>\n<parameter=content>\n<h1>Hello</h1>\n</parameter>'), self.request())

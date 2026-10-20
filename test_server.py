@@ -149,14 +149,14 @@ class ProvisioningTests(unittest.TestCase):
                 with self.assertRaises(HTTPError) as caught:urlopen(request)
                 self.assertEqual(caught.exception.code,424)
                 text=caught.exception.read().decode()
-                self.assertIn('internal completion endpoint returned HTTP 404',text)
+                self.assertIn('internal completion request returned HTTP 404',text)
                 self.assertNotIn('not-for-display',text);self.assertEqual(upstream.call_count,1)
         finally:service.shutdown();service.server_close()
 
     def test_provider_adapter_supplies_usage_and_tool_call_indexes(self):
         profile = server.ensure_user({'id': 'alice'}, lambda p: None)
         service = server.ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
-        service.settings = {'upstream_key': 'a'*64, 'model_upstream': 'https://provider/v1'}
+        service.settings = {'upstream_key': 'a'*64, 'model_upstream': 'https://provider/v1', 'model_tool_profile':'qwen3-coder-mlx'}
         response = {'id': 'test', 'created': 1, 'model': 'test', 'usage': {
             'prompt_tokens': 101, 'completion_tokens': 4, 'total_tokens': 105},
             'choices': [{'index': 0, 'message': {'role': 'assistant', 'tool_calls': [
@@ -167,12 +167,15 @@ class ProvisioningTests(unittest.TestCase):
         try:
             with patch.object(server, 'urlopen', return_value=io.BytesIO(json.dumps(response).encode())) as upstream:
                 req = Request('http://127.0.0.1:' + str(service.server_port) + '/provider/' + profile + '/v1/chat/completions',
-                              data=b'{"stream":true}', headers={'Authorization': 'Bearer '+key})
+                              data=b'{"stream":true,"model":"mundusx-agnostic","tools":[{"type":"function","function":{"name":"test"}},{"function":{"name":"read_file"}},{"function":{"name":"patch"}},{"function":{"name":"terminal"}}]}', headers={'Authorization': 'Bearer '+key})
                 with urlopen(req) as result:
                     events = [json.loads(line[6:]) for line in result.read().splitlines() if line.startswith(b'data: {')]
                 self.assertEqual(events[-1]['usage']['total_tokens'], 105)
                 self.assertEqual(events[0]['choices'][0]['delta']['tool_calls'][0]['index'], 0)
                 self.assertFalse(json.loads(upstream.call_args.args[0].data)['stream'])
+                self.assertEqual(json.loads(upstream.call_args.args[0].data)['max_tokens'],4096)
+                self.assertEqual(json.loads(upstream.call_args.args[0].data)['repetition_penalty'],1.0)
+                self.assertTrue(json.loads(upstream.call_args.args[0].data)['chat_template_kwargs']['opengpu_native_tool_guard'])
         finally:
             service.shutdown()
             service.server_close()

@@ -206,20 +206,26 @@ class Handler(BaseHTTPRequestHandler):
             streaming = bool(body.get('stream'))
             body['stream'] = False
             body.pop('stream_options', None)
+            if body.get('tools') and 'max_tokens' not in body and 'max_completion_tokens' not in body:
+                body['max_tokens'] = 4096
+            tool_names={tool.get('function',{}).get('name') for tool in body.get('tools',[]) if isinstance(tool,dict)}
+            if body.get('model')=='mundusx-agnostic' and {'read_file','patch'}<=tool_names:
+                body.setdefault('repetition_penalty',1.0)
+            print('provider_request', json.dumps({'profile':profile,'model':body.get('model'),'max_tokens':body.get('max_tokens',body.get('max_completion_tokens')),'repetition_penalty':body.get('repetition_penalty'),'tools':len(body.get('tools') or []),'messages':len(body.get('messages') or [])}),flush=True)
             headers = {'Content-Type': 'application/json'}
             if self.server.settings.get('model_upstream_key'):
                 headers['Authorization'] = 'Bearer ' + self.server.settings['model_upstream_key']
-            from provider_tools import completion_with_retry
+            from provider_tools import completion_with_retry, native_tool_profile
             tracker = getattr(self.server, 'active_requests', {}).get(profile)
             def send_model(payload):
                 req = Request(self.server.settings['model_upstream'].rstrip('/') + '/chat/completions',
                               data=json.dumps(payload).encode(), headers=headers)
-                with urlopen(req, timeout=90) as response:
+                with urlopen(req, timeout=180) as response:
                     result = json.load(response)
                 if tracker:
                     tracker.add_provider_usage(result.get('usage'))
                 return result
-            data = completion_with_retry(body, send_model)
+            data = completion_with_retry(native_tool_profile(body, self.server.settings.get('model_tool_profile')), send_model)
             if not streaming:
                 return self.respond(200, data)
             self.send_response(200)
@@ -245,8 +251,8 @@ class Handler(BaseHTTPRequestHandler):
         except HTTPError as exc:
             detail=exc.read(4096).decode(errors='replace')
             if exc.code==502 and 'native OpenAI tool completion failed' in detail and 'status code 404' in detail:
-                # A missing dependency is not a transient model overload. Avoid futile 5xx retries.
-                self.respond(424, {'error': 'Provider tool-calling backend is unavailable: its internal completion endpoint returned HTTP 404 (upstream HTTP 502). No tool response was received.'})
+                # This provider uses 404 for a failed generation worker too. Avoid futile 5xx retries.
+                self.respond(424, {'error': 'Provider tool-calling backend is unavailable: its internal completion request returned HTTP 404 (upstream HTTP 502). No tool response was received.'})
             else:
                 self.respond(exc.code, {'error': 'Model provider rejected the request (HTTP '+str(exc.code)+')'})
         except (URLError, TimeoutError, OSError, ValueError):

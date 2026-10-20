@@ -12,8 +12,23 @@ def normalize_tools(response, request):
     for choice in response.get('choices', []):
         message = choice.get('message') or {}
         content = message.get('content')
-        if message.get('tool_calls') or not isinstance(content, str):
+        if message.get('tool_calls'):
+            selected=request.get('tool_choice')
+            calls=message['tool_calls']
+            def allowed(call):
+                function=call.get('function',{});name=function.get('name')
+                if name not in offered or isinstance(selected,dict) and name!=selected.get('function',{}).get('name'):return False
+                schema=offered[name].get('parameters') or {}
+                try:arguments=json.loads(function.get('arguments','{}'))
+                except (ValueError,TypeError):return False
+                if not isinstance(arguments,dict) or any(key not in arguments for key in schema.get('required',[])):return False
+                return all('enum' not in definition or arguments.get(key) in definition['enum'] for key,definition in schema.get('properties',{}).items() if key in arguments)
+            if any(not allowed(call) for call in calls):
+                message['tool_calls']=[]
+                message['content']='Tool execution failed: the provider returned an unoffered tool or disallowed arguments. No action was executed.'
+                choice['finish_reason']='tool_calls'
             continue
+        if not isinstance(content, str):continue
         raw_content = content.strip()
         thought = re.match(r'^<think>(.*?)</think>\s*', raw_content, re.S)
         if thought:
@@ -55,6 +70,9 @@ def normalize_tools(response, request):
             except (ValueError, TypeError):
                 valid = False
                 break
+            if 'enum' in properties[key] and value not in properties[key]['enum']:
+                valid = False
+                break
             arguments[key] = value
         if not valid or raw[cursor:].strip() or not arguments or any(k not in arguments for k in schema.get('required', [])):
             continue
@@ -72,6 +90,82 @@ def invalid_tool_protocol(text):
     return bool(re.search(r'<function=[\w.-]+>|</?tool_call>|\[OUT-OF-BAND USER MESSAGE\]', unquoted))
 
 
+def scoped_edit_policy(request):
+    """Honor an explicit patch-only instruction without exposing whole-file writes."""
+    import copy
+    user=next((m.get('content') for m in reversed(request.get('messages') or []) if m.get('role')=='user'),'')
+    if request.get('tool_choice')=='none' or isinstance(request.get('tool_choice'),dict):return request
+    if not isinstance(user,str):return request
+    current=user.split('Completion requirements:')[0].split('Historical conversation context')[0]
+    read_only=bool(re.search(r'\bread.only\b|\bdo not edit\b',current,re.I))
+    if not read_only and not re.search(r'\bpatch only\b',current,re.I):return request
+    result=copy.deepcopy(request)
+    forbidden={'write_file','patch'} if read_only else {'write_file'}
+    result['tools']=[t for t in result.get('tools',[]) if t.get('function',{}).get('name') not in forbidden]
+    paths=set(re.findall(r'(?<![\w/])([\w./-]+\.(?:js|py))\b',user.split('Completion requirements:')[0]))
+    paths={p.removeprefix('/workspace/').removeprefix('./') for p in paths if '..' not in p.split('/') and p.lower()!='node.js'}
+    commands=['pwd','ls -la','ls -la /workspace','git status','git status --short','git diff --stat','git log -2 --oneline','npm test','npm run test','node --test']
+    for path in sorted(paths):
+        commands.append(('node --check ' if path.endswith('.js') else 'python -m py_compile ')+path)
+        if path=='server.js' and re.search(r'\b(?:import|export)\b',user,re.I):
+            commands.append('node -e "const s=require(\'./server.js\').server; if(!s || s.listening) process.exit(1); console.log(\'PASS import without listening\')"')
+    commands += ['cd /workspace && '+c for c in list(commands)]
+    for tool in result['tools']:
+        function=tool.get('function',{})
+        if function.get('name')=='terminal':
+            parameters=function.setdefault('parameters',{}).setdefault('properties',{})
+            parameters.setdefault('command',{'type':'string'})['enum']=commands
+            function['description']=(function.get('description') or '')+' Scoped task: terminal is limited to the listed read/check commands. Use patch for edits; shell writes are unavailable.'
+    return result
+
+
+def coding_tool_policy(request):
+    """Require real tool work until a relevant check returns, including a reported failure."""
+    import copy
+    names={t.get('function',{}).get('name') for t in request.get('tools',[]) if isinstance(t,dict)}
+    if 'terminal' not in names or not names.intersection({'write_file','patch'}) or request.get('tool_choice','auto')!='auto':return request
+    messages=request.get('messages') or []
+    start=next((i for i in range(len(messages)-1,-1,-1) if messages[i].get('role')=='user'),None)
+    if start is None:return request
+    text=messages[start].get('content')
+    if not isinstance(text,str):return request
+    text=text.split('Completion requirements:')[0].split('Historical conversation context')[0]
+    if not (re.search(r'\b(create|implement|build|write|save|fix|update|modify|add)\b',text,re.I) and re.search(r'\b(api|app|application|program|script|website|server\.js|test\.js)\b',text,re.I)):return request
+    require_test=bool(re.search(r'\btests?\b',text,re.I))
+    calls={}
+    for message in messages[start+1:]:
+        for call in message.get('tool_calls') or []:
+            if call.get('function',{}).get('name')=='terminal':
+                try:calls[call.get('id')]=json.loads(call['function']['arguments']).get('command','')
+                except (ValueError,TypeError,KeyError):pass
+        if message.get('role')!='tool':continue
+        command=calls.get(message.get('tool_call_id'),'')
+        check=re.search(r'(?:^|&&|;)\s*(?:node\b|python[3]?\b|pytest\b|npm\s+(?:test|run\s+(?:test|lint|build|check))\b|cargo\s+(?:test|check)\b|go\s+test\b)',command)
+        if require_test and not re.search(r'npm\s+(?:test|run\s+test)|--test|pytest|test[\w.-]*\.(?:js|py)|cargo\s+test|go\s+test',command):continue
+        try:result=json.loads(message.get('content',''))
+        except (ValueError,TypeError):continue
+        if check and isinstance(result,dict) and type(result.get('exit_code')) is int and result['exit_code']>=0 and not result.get('error'):return request
+    updated=copy.deepcopy(request);updated['tool_choice']='required';return updated
+
+
+def native_tool_profile(request, profile=None):
+    """Enable an installed Qwen/MLX guard only on explicitly configured providers."""
+    import copy
+    if profile != 'qwen3-coder-mlx' or request.get('parallel_tool_calls') is True:
+        return request
+    names={t.get('function',{}).get('name') for t in request.get('tools',[]) if isinstance(t,dict)}
+    if not {'read_file','patch','terminal'} <= names or request.get('tool_choice') == 'none':
+        return request
+    updated=copy.deepcopy(request)
+    updated['parallel_tool_calls']=False
+    updated.setdefault('repetition_penalty',1.0)
+    options=updated.get('chat_template_kwargs')
+    if options is not None and not isinstance(options,dict):
+        raise ValueError('Invalid chat template options')
+    updated['chat_template_kwargs']=dict(options or {},opengpu_native_tool_guard=True)
+    return updated
+
+
 def completion_with_retry(request, send):
     """One bounded protocol retry. Never extract actions from mixed narrative."""
     import copy
@@ -81,6 +175,7 @@ def completion_with_retry(request, send):
         return any(missing_call(c) or (not (c.get('message') or {}).get('tool_calls') and
                    invalid_tool_protocol((c.get('message') or {}).get('content')))
                    for c in data.get('choices', []))
+    request = coding_tool_policy(scoped_edit_policy(request))
     data = normalize_tools(send(request), request)
     if not request.get('tools') or request.get('tool_choice') == 'none' or not malformed(data):
         return data
