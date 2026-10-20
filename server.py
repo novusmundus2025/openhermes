@@ -96,6 +96,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path in ('/browser', '/browser-local'):
             return self.browser()
+        if self.path == '/coding':
+            return self.coding()
         if self.path == '/projects':
             return self.projects()
         match = re.fullmatch(r'/provider/(owui-[0-9a-f]{32})/v1/chat/completions', self.path)
@@ -212,7 +214,7 @@ class Handler(BaseHTTPRequestHandler):
             def send_model(payload):
                 req = Request(self.server.settings['model_upstream'].rstrip('/') + '/chat/completions',
                               data=json.dumps(payload).encode(), headers=headers)
-                with urlopen(req, timeout=620) as response:
+                with urlopen(req, timeout=90) as response:
                     result = json.load(response)
                 if tracker:
                     tracker.add_provider_usage(result.get('usage'))
@@ -244,6 +246,25 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(exc.code, {'error': 'Model provider rejected the request'})
         except (URLError, TimeoutError, OSError, ValueError):
             self.respond(503, {'error': 'Model provider unavailable'})
+
+    def coding(self):
+        from projects import ProjectError
+        if not hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+self.server.settings['bridge_key']):
+            return self.respond(401,{'error':'Unauthorized'})
+        try:
+            length=int(self.headers.get('Content-Length','0'))
+            if not 0<length<=128*1024:
+                return self.respond(413,{'error':'Coding request too large'})
+            payload=json.loads(self.rfile.read(length))
+            user,body=payload['user'],payload['body']
+            if not isinstance(user,dict) or not isinstance(body,dict):raise ValueError()
+            return self.respond(200,self.server.coding.dispatch(user,body))
+        except ProjectError as exc:
+            return self.respond(exc.status,{'error':str(exc)})
+        except (ValueError,TypeError,KeyError):
+            return self.respond(400,{'error':'Invalid coding request'})
+        except Exception:
+            return self.respond(503,{'error':'Coding service unavailable; no successful completion is confirmed'})
 
     def browser(self):
         from projects import ProjectError
@@ -304,6 +325,8 @@ def main():
     server.profile_locks = defaultdict(threading.Lock)
     from projects import ProjectService
     server.projects = ProjectService(connect, ensure_user, settings, STATE)
+    from coding import CodingService
+    server.coding = CodingService(server.projects)
     from guided_browser import BrowserService
     server.browser = BrowserService(ensure_user, STATE)
     from browser_automation import BrowserAutomation

@@ -13,7 +13,9 @@ def execution_issue(events):
         return 'No final agent result was received'
     if final.get('exit_code', 0):
         return 'Agent reported an execution failure'
-    text = final.get('text', '')
+    text = str(final.get('text') or '')
+    if any(marker in text.lower() for marker in ('verification is incomplete','request failed;','ended with tool_calls but returned no tool call')):
+        return 'Agent reported incomplete or failed tool execution'
     if 'File-mutation verifier:' in text:
         return 'Native verifier reported an unresolved file-edit failure'
     from provider_tools import invalid_tool_protocol

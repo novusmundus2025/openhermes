@@ -125,8 +125,14 @@ async def projects_page():
     return FileResponse(ROOT / 'web' / 'index.html', headers={'Cache-Control': 'no-store'})
 
 
+@router.get('/project-file/')
+async def project_file():
+    return FileResponse(ROOT / 'web' / 'file.html', headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer',
+        'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'self'"})
+
+
 @router.get('/projects/{asset}')
 async def project_asset(asset: str):
-    if asset not in ('app.js', 'style.css', 'nav.js', 'guided.js', 'guided.css'):
+    if asset not in ('app.js', 'style.css', 'nav.js', 'guided.js', 'guided.css', 'file.js'):
         raise HTTPException(404)
     return FileResponse(ROOT / 'web' / asset, headers={'Cache-Control': 'no-cache'})

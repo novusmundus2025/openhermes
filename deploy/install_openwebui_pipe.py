@@ -56,6 +56,15 @@ grants=[dict(zip(('principal_type','principal_id','permission'),row)) for row in
 public={'principal_type':'user','principal_id':'*','permission':'read'}
 if public not in grants:grants.append(public)
 api('models/model/access/update',{'id':fid,'name':name,'access_grants':grants})
+if payload.get('coder'):
+    # Preserve the existing preset, metadata and grants; replace its execution route.
+    preset=api('models/model?id=ehda-supercoder')
+    params=dict(preset.get('params') or {})
+    params['function_calling']='default'
+    form={k:preset[k] for k in ('id','name','meta','access_grants','is_active') if k in preset}
+    form.update(base_model_id=fid,params=params)
+    api('models/model/update',form)
+    print('EHDA SuperCoder now uses authenticated persistent project execution.')
 print(name+' enabled for approved authenticated users. Existing grants preserved.')
 print('No account roles, default models or legacy model connections changed.')
 '''
@@ -66,14 +75,16 @@ def main():
     parser.add_argument('--container', default='open-webui')
     parser.add_argument('--admin-id', help='Required when more than one administrator exists')
     parser.add_argument('--guided-browser', action='store_true', help='Install the Guided Browser Function instead of the standard profiles Pipe')
+    parser.add_argument('--coder', action='store_true', help='Install the project-backed coding Function and connect EHDA SuperCoder')
     parser.add_argument('--check', action='store_true', help='Read-only installation/activation check')
     args = parser.parse_args()
     payload = {'admin_id': args.admin_id, 'check': args.check,
-               'function_id':'hermes_guided_browser' if args.guided_browser else 'hermes_profiles',
-               'function_name':'Hermes Guided Browser — Ehda' if args.guided_browser else 'Hermes User Profiles'}
+               'function_id':'hermes_coder' if args.coder else 'hermes_guided_browser' if args.guided_browser else 'hermes_profiles',
+               'function_name':'Hermes Project Coder' if args.coder else 'Hermes Guided Browser — Ehda' if args.guided_browser else 'Hermes User Profiles',
+               'coder':args.coder}
     if not args.check:
         settings = json.loads((ROOT / 'settings.json').read_text())
-        payload.update(source=(ROOT / ('openwebui_guided_browser.py' if args.guided_browser else 'openwebui_pipe.py')).read_text(),
+        payload.update(source=(ROOT / ('openwebui_coder.py' if args.coder else 'openwebui_guided_browser.py' if args.guided_browser else 'openwebui_pipe.py')).read_text(),
                        bridge={'url': 'http://172.17.0.1:8643', 'key': settings['bridge_key']})
     subprocess.run(['docker', 'exec', '-i', '-e', 'PYTHONPATH=/app/backend',
                     args.container, 'python', '-c', CONTAINER_SCRIPT],

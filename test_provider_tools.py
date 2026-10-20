@@ -72,6 +72,25 @@ class ProviderToolTests(unittest.TestCase):
         self.assertTrue(result['choices'][0]['message']['content'].startswith('Tool execution failed:'))
         self.assertNotIn('tool_calls', result['choices'][0]['message'])
 
+    def test_tool_finish_without_call_is_retried_with_required_tool(self):
+        broken=self.response('Successfully created it.')
+        broken['choices'][0]['finish_reason']='tool_calls'
+        good=self.response('<function=write_file><parameter=path>x</parameter><parameter=content>hi</parameter>')
+        send=Mock(side_effect=[broken,good])
+        result=completion_with_retry(self.request(),send)
+        self.assertEqual(send.call_args.args[0]['tool_choice'],'required')
+        self.assertIn('tool_calls',result['choices'][0]['message'])
+
+    def test_empty_tool_finish_never_preserves_fabricated_success(self):
+        def send(_):
+            data=self.response('Successfully created and tested it.')
+            data['choices'][0]['finish_reason']='tool_calls'
+            return data
+        result=completion_with_retry(self.request(),send)['choices'][0]
+        self.assertEqual(result['finish_reason'],'stop')
+        self.assertTrue(result['message']['content'].startswith('Tool execution failed:'))
+        self.assertNotIn('Successfully',result['message']['content'])
+
     def test_quoted_protocol_example_is_not_an_execution_attempt(self):
         self.assertFalse(invalid_tool_protocol('Example:\n```text\n<function=read_file>\n```'))
         self.assertTrue(invalid_tool_protocol('Some prose\n<function=read_file>'))

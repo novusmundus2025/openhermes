@@ -75,14 +75,18 @@ def invalid_tool_protocol(text):
 def completion_with_retry(request, send):
     """One bounded protocol retry. Never extract actions from mixed narrative."""
     import copy
+    def missing_call(choice):
+        return choice.get('finish_reason')=='tool_calls' and not (choice.get('message') or {}).get('tool_calls')
     def malformed(data):
-        return any(not (c.get('message') or {}).get('tool_calls') and
-                   invalid_tool_protocol((c.get('message') or {}).get('content'))
+        return any(missing_call(c) or (not (c.get('message') or {}).get('tool_calls') and
+                   invalid_tool_protocol((c.get('message') or {}).get('content')))
                    for c in data.get('choices', []))
     data = normalize_tools(send(request), request)
     if not request.get('tools') or request.get('tool_choice') == 'none' or not malformed(data):
         return data
     retry = copy.deepcopy(request)
+    if any(missing_call(c) for c in data.get('choices',[])) and retry.get('tool_choice','auto')=='auto':
+        retry['tool_choice']='required'
     retry.setdefault('messages', []).append({'role': 'system', 'content':
         'Tool protocol correction: your previous output was malformed and was not executed. '
         'Continue the actual user request using the advertised tools. Return a valid structured '
@@ -93,7 +97,7 @@ def completion_with_retry(request, send):
     if malformed(data):
         for choice in data.get('choices', []):
             message = choice.get('message') or {}
-            if not message.get('tool_calls') and invalid_tool_protocol(message.get('content')):
+            if missing_call(choice) or (not message.get('tool_calls') and invalid_tool_protocol(message.get('content'))):
                 message['content'] = ('Tool execution failed: the model returned malformed tool-call text '
                                       'after one retry. No action was executed from that text. Please retry '
                                       'or use a model with reliable tool calling.')
