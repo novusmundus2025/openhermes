@@ -148,6 +148,49 @@ def coding_tool_policy(request):
     updated=copy.deepcopy(request);updated['tool_choice']='required';return updated
 
 
+def finish_scoped_checks(request):
+    """Stop a patch-only verification loop after requested checks and readback succeed."""
+    import copy
+    if request.get('tool_choice','auto')!='auto':return request
+    messages=request.get('messages') or []
+    start=next((i for i in range(len(messages)-1,-1,-1) if messages[i].get('role')=='user'),None)
+    if start is None:return request
+    text=messages[start].get('content','')
+    if not isinstance(text,str):return request
+    text=text.split('Completion requirements:')[0].split('Historical conversation context')[0]
+    if not re.search(r'\bpatch only\b',text,re.I):return request
+    paths=set(re.findall(r'(?<![\w/])([\w./-]+\.js)\b',text))
+    paths={p.removeprefix('/workspace/').removeprefix('./') for p in paths if '..' not in p.split('/') and p.lower()!='node.js'}
+    if not paths or 'node --check' not in text:return request
+    calls={};reads=set();checks=set();diff=False
+    for message in messages[start+1:]:
+        for call in message.get('tool_calls') or []:
+            try:calls[call.get('id')]=(call['function']['name'],json.loads(call['function']['arguments']))
+            except (KeyError,ValueError,TypeError):pass
+        if message.get('role')!='tool':continue
+        name,args=calls.get(message.get('tool_call_id'),('',{}))
+        try:result=json.loads(message.get('content',''))
+        except (TypeError,ValueError):continue
+        if not isinstance(result,dict):continue
+        path=str(args.get('path','')).removeprefix('/workspace/').removeprefix('./')
+        if name in ('patch','write_file'):
+            # Any later edit attempt invalidates earlier evidence, even if rejected.
+            reads.clear();checks.clear();diff=False
+        if name=='read_file' and not result.get('error') and not result.get('truncated') and not result.get('not_found') and 'content' in result:
+            reads.add(path)
+        if name=='terminal' and result.get('exit_code')==0 and not result.get('error'):
+            command=args.get('command','').removeprefix('cd /workspace && ').strip()
+            if command.startswith('node --check '):checks.add(command[len('node --check '):].removeprefix('/workspace/').removeprefix('./'))
+            if command=='git diff --stat':diff=True
+    if not paths<=reads or not paths<=checks or ('git diff --stat' in text and not diff):return request
+    result=copy.deepcopy(request);result['tool_choice']='none'
+    options=result.get('chat_template_kwargs')
+    if isinstance(options,dict):
+        options.pop('opengpu_native_tool_guard',None);options.pop('opengpu_require_tool_call',None)
+    result.setdefault('messages',[]).append({'role':'system','content':'The scoped file readback and requested checks have completed successfully. Return the final report now. Describe only the checks actually run; do not claim full application verification.'})
+    return result
+
+
 def native_tool_profile(request, profile=None):
     """Enable an installed Qwen/MLX guard only on explicitly configured providers."""
     import copy
@@ -175,7 +218,7 @@ def completion_with_retry(request, send):
         return any(missing_call(c) or (not (c.get('message') or {}).get('tool_calls') and
                    invalid_tool_protocol((c.get('message') or {}).get('content')))
                    for c in data.get('choices', []))
-    request = coding_tool_policy(scoped_edit_policy(request))
+    request = coding_tool_policy(finish_scoped_checks(scoped_edit_policy(request)))
     data = normalize_tools(send(request), request)
     if not request.get('tools') or request.get('tool_choice') == 'none' or not malformed(data):
         return data

@@ -1,6 +1,6 @@
 import json
 import unittest
-from provider_tools import normalize_tools, invalid_tool_protocol, completion_with_retry, coding_tool_policy, scoped_edit_policy, native_tool_profile
+from provider_tools import normalize_tools, invalid_tool_protocol, completion_with_retry, coding_tool_policy, scoped_edit_policy, native_tool_profile, finish_scoped_checks
 from unittest.mock import Mock
 
 
@@ -11,6 +11,21 @@ class ProviderToolTests(unittest.TestCase):
 
     def response(self, text):
         return {'choices': [{'message': {'role': 'assistant', 'content': text}, 'finish_reason': 'stop'}]}
+
+    def test_scoped_completion_needs_readback_and_all_requested_checks(self):
+        request={'messages':[{'role':'user','content':'Patch only src/server.js. Run node --check src/server.js and git diff --stat.'}]}
+        def result(name,args,value):
+            key=str(len(request['messages']))
+            request['messages'].extend([{'role':'assistant','tool_calls':[{'id':key,'function':{'name':name,'arguments':json.dumps(args)}}]}, {'role':'tool','tool_call_id':key,'content':json.dumps(value)}])
+        result('patch',{'path':'/workspace/src/server.js'},{'success':True})
+        result('terminal',{'command':'node --check src/server.js'},{'exit_code':0})
+        result('terminal',{'command':'git diff --stat'},{'exit_code':0})
+        self.assertIs(finish_scoped_checks(request),request)
+        result('read_file',{'path':'/workspace/src/server.js'},{'content':'saved code','truncated':False})
+        self.assertEqual(finish_scoped_checks(request)['tool_choice'],'none')
+        self.assertNotIn('tool_choice',request)
+        result('patch',{'path':'/workspace/src/server.js'},{'success':True})
+        self.assertIs(finish_scoped_checks(request),request)
 
     def test_failed_verification_can_be_reported_instead_of_forcing_more_tools(self):
         request={'tools':[{'function':{'name':'terminal'}},{'function':{'name':'write_file'}}],
