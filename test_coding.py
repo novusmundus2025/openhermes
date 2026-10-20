@@ -6,8 +6,8 @@ import tempfile
 import unittest
 import uuid
 from unittest.mock import patch
-from coding import CodingService, evidence, clean_project_name, fallback_project_name, suggest_project_name
-from openwebui_coder import Pipe, result_message, conversation_id, tool_summary, git_intent, progress_description
+from coding import CodingService, evidence, clean_project_name, fallback_project_name, suggest_project_name, verify_artifacts
+from openwebui_coder import Pipe, result_message, conversation_id, tool_summary, git_intent, progress_description, user_context
 from projects import ProjectError
 
 
@@ -126,11 +126,53 @@ class CodingTests(unittest.TestCase):
         task=self.start();root=Path(self.projects.records[task['project_id']]['root'])
         (root/'app.js').write_text('console.log("hello")')
         job=self.projects.jobs[task['job_id']]
-        job.update(state='completed',exit_code=0,events=[{'type':'result','text':'Created app.js.'}])
+        job.update(state='completed',exit_code=0,events=[{'type':'tool_use','name':'terminal','tool_call_id':'check','input':{'command':'node app.js'}},{'type':'tool_result','name':'terminal','tool_call_id':'check','output':'{"exit_code":0,"output":"hello"}'},{'type':'result','text':'Created app.js.'}])
         result=self.service.dispatch({'id':'alice'},{'action':'status','job_id':task['job_id']})
         self.assertTrue(result['verified']);self.assertEqual(result['files'][0]['path'],'app.js')
         (root/'later.js').write_text('another task')
         self.assertEqual(result,self.service.dispatch({'id':'alice'},{'action':'status','job_id':task['job_id']}))
+    def test_completion_requires_requested_artifacts_and_real_checks(self):
+        result={'verified':True,'answer':'All tests passed successfully','files':[{'path':'package.json'}],'commands':[]}
+        verify_artifacts(result,'Implement an API with server.js and automated tests')
+        self.assertFalse(result['verified']);self.assertIn('server.js',result['issue']);self.assertEqual(result['answer'],'')
+        result={'verified':True,'answer':'Tests passed','files':[{'path':'server.js'}],'commands':[{'command':'node --check server.js','exit_code':0}]}
+        verify_artifacts(result,'Implement an API with server.js and automated tests')
+        self.assertFalse(result['verified']);self.assertIn('test command',result['issue'])
+
+    def test_explicit_dot_relative_path_matches_saved_file(self):
+        value={'verified':True,'answer':'Done','files':[{'path':'server.js'}],
+               'commands':[{'command':'node --check server.js','exit_code':0}]}
+        verify_artifacts(value,'Fix API server.js and inspect ./server.js')
+        self.assertTrue(value['verified'])
+
+    def test_preserved_handlers_cannot_disappear_behind_a_syntax_check(self):
+        first=self.start();root=Path(self.projects.records[first['project_id']]['root'])
+        (root/'server.js').write_text('function handlePost() {}\nmodule.exports = {};')
+        task=self.start(prompt='Fix API server.js; preserve all route handlers')
+        (root/'server.js').write_text('module.exports = {};')
+        self.projects.jobs[task['job_id']].update(state='completed',exit_code=0,events=[
+            {'type':'tool_use','name':'terminal','tool_call_id':'c','input':{'command':'node --check server.js'}},
+            {'type':'tool_result','name':'terminal','tool_call_id':'c','output':'{"exit_code":0}'},
+            {'type':'result','text':'Fixed. All handlers preserved.'}])
+        value=self.service.dispatch({'id':'alice'},{'action':'status','job_id':task['job_id']})
+        self.assertFalse(value['verified']);self.assertIn('handlePost',value['issue'])
+
+    def test_read_only_request_never_accepts_unexpected_writes(self):
+        task=self.start(prompt='Read-only inspection; do not edit files')
+        (Path(self.projects.records[task['project_id']]['root'])/'unexpected.js').write_text('changed')
+        self.projects.jobs[task['job_id']].update(state='completed',exit_code=0,events=[{'type':'result','text':'Read-only check done'}])
+        value=self.service.dispatch({'id':'alice'},{'action':'status','job_id':task['job_id']})
+        self.assertFalse(value['verified']);self.assertIn('read-only',value['issue'])
+
+    def test_read_only_negated_creation_does_not_require_a_write(self):
+        task=self.start(prompt='Read-only. Do not edit, create or delete files. Run npm test.')
+        self.projects.jobs[task['job_id']].update(state='completed',exit_code=0,events=[
+            {'type':'tool_use','name':'terminal','tool_call_id':'t','input':{'command':'npm test'}},
+            {'type':'tool_result','name':'terminal','tool_call_id':'t','output':'{"exit_code":0,"output":"8 passed"}'},
+            {'type':'result','text':'8 tests passed'}])
+        value=self.service.dispatch({'id':'alice'},{'action':'status','job_id':task['job_id']})
+        self.assertTrue(value['verified'])
+
     def test_failed_tool_call_hides_unverified_success_claim(self):
         job={'state':'completed','exit_code':0,'events':[{'type':'result','text':'Created script. Request failed; verification is incomplete.'}]}
         result=evidence(job)
@@ -138,6 +180,13 @@ class CodingTests(unittest.TestCase):
 
 
 class CoderFunctionTests(unittest.TestCase):
+    def test_fresh_session_excludes_old_assistant_claims_and_user_history(self):
+        messages=[{'role':'user','content':'old request'},{'role':'assistant','content':'fabricated code'},
+                  {'role':'user','content':'/new-session'},{'role':'assistant','content':'workspace'},
+                  {'role':'user','content':'create current program'},{'role':'assistant','content':'unverified claim'},
+                  {'role':'user','content':'add validation'}]
+        self.assertEqual(user_context(messages),'user: create current program')
+
     def test_progress_reports_waiting_and_actual_tool_activity(self):
         self.assertIn('Waiting for model response',progress_description([],72,72))
         self.assertIn('72s elapsed',progress_description([],72,72))
@@ -164,6 +213,12 @@ class CoderFunctionTests(unittest.TestCase):
         self.assertNotIn('/private/account/workspace',result)
         self.assertIn('cd /workspace && npm test',result)
         self.assertNotIn('&amp;',result)
+    def test_result_shows_latest_check_instead_of_cleanup(self):
+        text=result_message({'project_id':'p','verified':True,'commands':[
+            {'command':'node test_import.js','exit_code':0,'output':'PASS import'},
+            {'command':'rm test_import.js','exit_code':0}]})
+        self.assertIn('PASS import',text);self.assertNotIn('rm test_import.js',text)
+
     def test_workspace_location_is_explicit_not_lost(self):
         result=result_message({'project_id':'p','state':'workspace','workspace':'/actual/user/project'},show_workspace=True)
         self.assertIn('/actual/user/project',result)
@@ -195,3 +250,10 @@ class CoderFunctionTests(unittest.TestCase):
         self.assertEqual(asyncio.run(run()),[''])
     def test_metadata_conversation_id_wins_over_body(self):
         self.assertEqual(conversation_id({'chat_id':'body'},{'chat_id':'injected'}),'injected')
+
+
+class ExplanationRequirementsTests(__import__("unittest").TestCase):
+    def test_explanations_do_not_receive_edit_instructions(self):
+        from coding import task_requirements
+        self.assertIn("Read-only explanation",task_requirements("show me the complete flow of the program"))
+        self.assertIn("Save requested code",task_requirements("Update server.js"))

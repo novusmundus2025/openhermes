@@ -1,6 +1,6 @@
 import json
 import unittest
-from provider_tools import normalize_tools, invalid_tool_protocol, completion_with_retry, coding_tool_policy, scoped_edit_policy, native_tool_profile, finish_scoped_checks
+from provider_tools import normalize_tools, invalid_tool_protocol, completion_with_retry, coding_tool_policy, scoped_edit_policy, native_tool_profile, finish_scoped_checks, explanation_request, explanation_policy
 from unittest.mock import Mock
 
 
@@ -11,6 +11,34 @@ class ProviderToolTests(unittest.TestCase):
 
     def response(self, text):
         return {'choices': [{'message': {'role': 'assistant', 'content': text}, 'finish_reason': 'stop'}]}
+
+    def test_explanation_intent_and_mixed_edit_requests(self):
+        for text in ['possible for u to show me the complete flow of the program?', 'Explain how this API works', 'What does deleteFile do?']:
+            self.assertTrue(explanation_request(text),text)
+        for text in ['Update server.js and explain the result', 'Explain the flow then fix the bug', 'Can u please restructure this application?']:
+            self.assertFalse(explanation_request(text),text)
+        self.assertTrue(explanation_request('Write a plan first.\nUser request:\nshow me the complete flow of the program?\n\nCompletion requirements: Save code'))
+
+    def test_explanation_follows_actual_local_imports(self):
+        request={'tools':[{'function':{'name':'read_file'}}], 'messages':[{'role':'user','content':'Explain how the program works'}]}
+        for i,(path,content) in enumerate([('package.json','{}'),('src/server.js',"const models=require('./models');")]):
+            request['messages'] += [{'role':'assistant','tool_calls':[{'id':str(i),'function':{'name':'read_file','arguments':json.dumps({'path':path})}}]}, {'role':'tool','tool_call_id':str(i),'content':json.dumps({'content':content})}]
+        result=explanation_policy(request)
+        self.assertEqual(result['tool_choice'],'required')
+        self.assertIn('src/models/index.js',result['messages'][-1]['content'])
+        request['messages'] += [{'role':'assistant','tool_calls':[{'id':'2','function':{'name':'read_file','arguments':'{"path":"/workspace/src/models/index.js"}'}}]}, {'role':'tool','tool_call_id':'2','content':'{"content":"module.exports = {};"}'}]
+        self.assertEqual(explanation_policy(request)['tool_choice'],'auto')
+
+    def test_explanation_has_no_mutators_or_terminal_and_is_bounded(self):
+        request={'tools':[{'function':{'name':name}} for name in ['read_file','write_file','patch','terminal']],
+                 'messages':[{'role':'user','content':'Explain the flow of the program'}]}
+        result=explanation_policy(request)
+        self.assertEqual([t['function']['name'] for t in result['tools']],['read_file'])
+        self.assertEqual(len(request['tools']),4)
+        for i in range(8):
+            request['messages'] += [{'role':'assistant','tool_calls':[{'id':str(i),'function':{'name':'read_file','arguments':json.dumps({'path':'/workspace/src/'+str(i)+'.js'})}}]},
+                {'role':'tool','tool_call_id':str(i),'content':'{"content":"code","truncated":false}'}]
+        self.assertEqual(explanation_policy(request)['tool_choice'],'none')
 
     def test_scoped_completion_needs_readback_and_all_requested_checks(self):
         request={'messages':[{'role':'user','content':'Patch only src/server.js. Run node --check src/server.js and git diff --stat.'}]}

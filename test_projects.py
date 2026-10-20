@@ -158,6 +158,7 @@ class ProjectBoundaryTests(unittest.TestCase):
         config=yaml.safe_load((runtime/'config.yaml').read_text())
         self.assertEqual(config['agent']['run_budget_seconds'],600)
         self.assertEqual(config['model']['default'],'fixture-model')
+        self.assertEqual(config['model']['context_length'],65536)
 
     def test_git_inspection_runs_inside_container(self):
         with patch.object(self.service, 'container', return_value='isolated-project'), patch.object(

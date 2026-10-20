@@ -5,6 +5,28 @@ from project_memory import initialize, record
 
 
 class ProjectMemoryTests(unittest.TestCase):
+    def test_execution_worker_has_layout_policy_in_its_scope(self):
+        import symtable
+        source=Path(__file__).with_name('projects.py').read_text(encoding='utf-8')
+        table=symtable.symtable(source,'projects.py','exec')
+        def inspect(scope):
+            for child in scope.get_children():
+                symbols={symbol.get_name():symbol for symbol in child.get_symbols()}
+                policy=symbols.get('PROJECT_STRUCTURE_GUIDANCE')
+                if policy and policy.is_referenced():
+                    self.assertTrue(policy.is_imported(), child.get_name())
+                inspect(child)
+        inspect(table)
+
+    def test_new_project_records_ecosystem_layout_policy(self):
+        with tempfile.TemporaryDirectory() as root:
+            initialize(root)
+            text=(Path(root)/'AGENTS.md').read_text()
+            self.assertIn('Follow the user-specified layout', text)
+            self.assertIn('there is no universal folder tree', text)
+            self.assertIn('For existing projects, preserve the established layout', text)
+            self.assertIn('small script', text)
+
     def test_preserves_existing_instructions_and_records_failure(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root)

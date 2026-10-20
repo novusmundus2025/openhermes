@@ -148,6 +148,64 @@ def coding_tool_policy(request):
     updated=copy.deepcopy(request);updated['tool_choice']='required';return updated
 
 
+def current_request_text(text):
+    if not isinstance(text,str):return ''
+    text=text.rsplit('User request:\n',1)[-1]
+    return text.split('Completion requirements:')[0].split('Historical conversation context')[0].strip()
+
+
+def explanation_request(text):
+    text=current_request_text(text)
+    mutation=r'(?:fix|update|modify|edit|delete|remove|create|implement|refactor|restructure|build|add)'
+    if re.search(r'\b(?:and|then|also)\s+(?:please\s+)?'+mutation+r'\b',text,re.I):return False
+    if re.search(r'^(?:please\s+)?'+mutation+r'\b|\b(?:can|could|would)\s+(?:you|u)\s+(?:please\s+)?'+mutation+r'\b',text,re.I):return False
+    return bool(re.search(r'\b(?:explain|describe|walk me through)\b|\bshow\b.{0,70}\b(?:flow|architecture|how|program works)\b|\bhow\b.{0,60}\bworks?\b|\bwhat\b.{0,60}\bdoes?\b',text,re.I))
+
+
+def explanation_policy(request):
+    import copy
+    messages=request.get('messages') or []
+    start=next((i for i in range(len(messages)-1,-1,-1) if messages[i].get('role')=='user'),None)
+    if start is None or not explanation_request(messages[start].get('content')):return request
+    result=copy.deepcopy(request)
+    result['tools']=[t for t in result.get('tools',[]) if t.get('function',{}).get('name')=='read_file']
+    result['tool_choice']='auto'
+    calls={};seen=set();imports=set();attempts=0
+    for message in messages[start+1:]:
+        for call in message.get('tool_calls') or []:
+            try:
+                if call['function']['name']=='read_file':calls[call['id']]=json.loads(call['function']['arguments']).get('path','')
+            except (KeyError,ValueError,TypeError):pass
+        if message.get('role')!='tool' or message.get('tool_call_id') not in calls:continue
+        attempts+=1
+        try:value=json.loads(message.get('content',''))
+        except (ValueError,TypeError):continue
+        path=calls[message['tool_call_id']]
+        if isinstance(value,dict) and 'content' in value and not any(value.get(k) for k in ('error','truncated','not_found')) and '.hermes-project/' not in path and not path.endswith('AGENTS.md'):
+            path=path.removeprefix('/workspace/').removeprefix('./')
+            seen.add(path)
+            if path.endswith(('.js','.cjs','.mjs')):
+                import posixpath
+                for target in re.findall(r"require\(\s*['\"](\.{1,2}/[^'\"]+)['\"]\s*\)",str(value['content'])):
+                    resolved=posixpath.normpath(posixpath.join(posixpath.dirname(path),target))
+                    if resolved.startswith('../') or not re.fullmatch(r'[\w./-]+',resolved):continue
+                    candidates=(resolved,) if resolved.endswith(('.js','.cjs','.mjs','.json')) else (resolved+'.js',resolved+'/index.js')
+                    imports.add(candidates)
+    pending=[group for group in sorted(imports) if not any(path in seen for path in group)]
+    if len(seen)>=8 or attempts>=12 or not result['tools']:
+        result['tool_choice']='none'
+        options=result.get('chat_template_kwargs')
+        if isinstance(options,dict):
+            options.pop('opengpu_native_tool_guard',None);options.pop('opengpu_require_tool_call',None)
+        instruction='Inspection budget reached. Answer the explanation question now from inspected code. Explain the entry point, request flow, modules and data flow. State any gaps explicitly. Do not claim tests or edits.'
+    else:
+        if len(seen)<2 or pending:result['tool_choice']='required'
+        instruction='For Node apps, npm start follows package.json scripts.start; main describes library imports and may point to a legacy file. Read the startup script target before explaining execution. Read-only explanation task. Use read_file only as needed, beginning with package.json and its actual entry point, then follow imports. Answer once enough evidence is available. Do not edit files, run tests, or continue an earlier repair. Distinguish verified code flow from runtime assumptions.'
+    if pending and result['tool_choice']!='none':instruction+=' Inspect these unresolved local imports before answering (alternative resolution paths in each group): '+json.dumps(pending)
+    result.setdefault('messages',[]).append({'role':'system','content':instruction})
+    return result
+
+
 def finish_scoped_checks(request):
     """Stop a patch-only verification loop after requested checks and readback succeed."""
     import copy
@@ -218,7 +276,7 @@ def completion_with_retry(request, send):
         return any(missing_call(c) or (not (c.get('message') or {}).get('tool_calls') and
                    invalid_tool_protocol((c.get('message') or {}).get('content')))
                    for c in data.get('choices', []))
-    request = coding_tool_policy(finish_scoped_checks(scoped_edit_policy(request)))
+    request = explanation_policy(coding_tool_policy(finish_scoped_checks(scoped_edit_policy(request))))
     data = normalize_tools(send(request), request)
     if not request.get('tools') or request.get('tool_choice') == 'none' or not malformed(data):
         return data

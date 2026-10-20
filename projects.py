@@ -215,7 +215,7 @@ class ProjectService:
 
     def create(self, user, profile, name, repository=None):
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 60 or any(ord(c) < 32 for c in name):
-            raise ProjectError('Project name must have 1–60 characters')
+            raise ProjectError('Project name must have 1â€“60 characters')
         name = name.strip()
         if repository:
             parsed = urlparse(repository)
@@ -228,7 +228,7 @@ class ProjectService:
         root.chmod(0o755)
         (root / 'README.md').write_text('# ' + name + '\n\nBuilt with Hermes.\n')
         (root / '.gitignore').write_text('node_modules/\n.venv/\n__pycache__/\n.env\n.env.*\n')
-        from project_memory import initialize
+        from project_memory import initialize, PROJECT_STRUCTURE_GUIDANCE
         initialize(root)
         init = self.run(['git', 'init', '--quiet', str(root)])
         if init.returncode:
@@ -263,6 +263,7 @@ class ProjectService:
                 runtime = self.state / 'project-runtime' / project['id']
                 config = yaml.safe_load(read_bytes(runtime, 'config.yaml')) or {}
                 config.setdefault('agent', {}).update(max_turns=16, run_budget_seconds=600)
+                config.setdefault('model', {})['context_length']=65536
                 private_write(runtime, 'config.yaml', yaml.safe_dump(config))
                 if not info['State']['Running']:
                     result = self.run(['docker', 'start', name])
@@ -281,8 +282,9 @@ class ProjectService:
             source = yaml.safe_load((Path.home() / '.hermes' / 'profiles' / project['profile'] / 'config.yaml').read_text())
             model_key = hmac.new(self.settings['upstream_key'].encode(), ('model:' + project['profile']).encode(), hashlib.sha256).hexdigest()
             model = dict(source.get('model') or {})
+            context=65536
             model.update(provider='custom', base_url='http://172.17.0.1:8643/provider/' + project['profile'] + '/v1',
-                         key_env='OPENHERMES_MODEL_KEY', streaming=False)
+                         key_env='OPENHERMES_MODEL_KEY', streaming=False, context_length=context)
             model.pop('api_key', None)
             config = {'model': model, 'terminal': {'backend': 'local', 'cwd': '/workspace'},
                       'agent': {'max_turns': 16, 'run_budget_seconds': 600}, 'display': {'streaming': True},
@@ -329,7 +331,7 @@ class ProjectService:
         unexecuted_tools = False
         try:
             container = self.container(project)
-            from project_memory import initialize
+            from project_memory import initialize, PROJECT_STRUCTURE_GUIDANCE
             initialize(project['root'])
             with self.connect() as db:
                 db.execute("UPDATE project_jobs SET state='running',updated_at=? WHERE id=?", (int(time.time()), jid))
@@ -347,6 +349,7 @@ class ProjectService:
                            '--in', '/workspace', '--continue', ('project-' + project['id'] if project.get('chat_id', '').startswith('legacy-') else 'chat-' + project['chat_id']), '--create-if-missing',
                            '--max-turns', '16', '-t', 'terminal,file']
                 input_data = (
+                    PROJECT_STRUCTURE_GUIDANCE + '\n\n' +
                     'Read /workspace/AGENTS.md, .hermes-project/PLAN.md, .hermes-project/CHECKPOINT.md and recent .hermes-project/tasks/TASK-*.md records first. '
                     'Write an actionable .hermes-project/PLAN.md before substantial work. Update progress and .hermes-project/CHECKPOINT.md with '
                     'verified results, tests, blockers and next steps before ending. Never store secrets in these files. '
@@ -360,6 +363,10 @@ class ProjectService:
                     'Do not repeat a failed write unchanged or claim it succeeded. Terminal cwd may persist; use '
                     'absolute paths for cd. Report unresolved failures honestly.\n\nUser request:\n' + prompt)
             if kind == 'agent':
+                from provider_tools import explanation_request
+                if explanation_request(prompt):
+                    command[command.index('--continue')+1] = 'explain-'+jid
+                    input_data = ('Read-only explanation. Inspect package/build configuration and the actual entry point, then follow relevant imports with read_file. For Node apps npm start uses scripts.start, not necessarily the package main library field. Explain the current program flow in chat. Do not edit files, write plans, run tests, or continue earlier repairs. State unknowns.\n\nUser request:\n' + prompt)
                 command = [sys.executable, str(Path(__file__).with_name('agent_recovery.py')), '--workspace-root', project['root'], '--'] + command
             with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, text=True, bufsize=1) as process:
@@ -397,7 +404,7 @@ class ProjectService:
                                         'total_tokens': tokens.get('total', 0)}}).encode())
                         except (ValueError, AttributeError):
                             pass
-                    if time.monotonic() - last_update > 0.3:
+                    if time.monotonic() - last_update > 0.3 or (kind == 'agent' and events and events[-1].get('type') in ('tool_result','result')):
                         with self.connect() as db:
                             db.execute('UPDATE project_jobs SET output=?,events=?,updated_at=? WHERE id=?',
                                        (output, json.dumps(events), int(time.time()), jid))
@@ -480,7 +487,7 @@ class ProjectService:
         if action == 'rename_chat':
             title = payload.get('title')
             if not isinstance(title, str) or not 1 <= len(title.strip()) <= 100 or any(ord(c) < 32 for c in title):
-                raise ProjectError('Conversation title must have 1–100 characters')
+                raise ProjectError('Conversation title must have 1â€“100 characters')
             with self.connect() as db:
                 changed = db.execute('UPDATE project_chats SET title=? WHERE id=? AND project_id=? AND deleted_at IS NULL', (title.strip(), payload.get('chat_id'), project['id']))
                 if not changed.rowcount:
@@ -494,7 +501,7 @@ class ProjectService:
         if action == 'rename':
             name = payload.get('name')
             if not isinstance(name, str) or not 1 <= len(name.strip()) <= 60 or any(ord(c) < 32 for c in name):
-                raise ProjectError('Project name must have 1–60 characters')
+                raise ProjectError('Project name must have 1â€“60 characters')
             result = self.run([HERMES, '-p', profile, 'project', 'rename', project['slug'], name.strip()], timeout=90)
             if result.returncode:
                 raise ProjectError('Hermes could not rename the project', 503)

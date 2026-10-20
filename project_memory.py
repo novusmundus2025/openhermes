@@ -7,8 +7,26 @@ import hashlib
 from pathlib import Path
 
 
+PROJECT_STRUCTURE_GUIDANCE = (
+    'Project layout policy: For a new project, first inspect the workspace and identify the requested '
+    'language, framework, project type and any user-specified folder structure. Follow the user-specified '
+    'layout when provided. Otherwise choose the conventional layout recommended by that ecosystem or '
+    'its official scaffolder; there is no universal folder tree for every language. Use the selected '
+    'framework scaffolder when appropriate and preserve its conventions. Keep entry points thin and '
+    'separate application code, tests, configuration and documentation as the project needs. '
+    'For example, use Python package/pyproject conventions, Go cmd/internal where warranted, Rust '
+    'Cargo src/tests, Java or Kotlin build-tool conventions, and frontend framework conventions. '
+    'For Node.js APIs, separate routes, handlers/services and persistence where the scope warrants it. '
+    'Do not force these examples onto another ecosystem, create empty speculative layers, or overengineer '
+    'a small script. Record the chosen layout and short rationale in .hermes-project/PLAN.md before '
+    'implementation and describe how to run and test it in README.md. Keep secrets, dependency folders '
+    'and build outputs out of Git. For existing projects, preserve the established layout unless the '
+    'user requests restructuring. Verify imports, build configuration and tests against the chosen layout. '
+)
+
+
 TEMPLATES = {
-    'AGENTS.md': '# Project instructions\n\nRead .hermes-project/PLAN.md, .hermes-project/CHECKPOINT.md and recent .hermes-project/tasks/TASK-*.md before resuming.\nInspect current code before editing. Preserve unrelated changes.\nUpdate .hermes-project/PLAN.md with steps and progress, and .hermes-project/CHECKPOINT.md with verified results,\nchecks, blockers and next steps. Never store passwords or tokens here.\nA saved edit or Git commit does not prove correctness.\n',
+    'AGENTS.md': PROJECT_STRUCTURE_GUIDANCE + '\n\n' + '# Project instructions\n\nRead .hermes-project/PLAN.md, .hermes-project/CHECKPOINT.md and recent .hermes-project/tasks/TASK-*.md before resuming.\nInspect current code before editing. Preserve unrelated changes.\nUpdate .hermes-project/PLAN.md with steps and progress, and .hermes-project/CHECKPOINT.md with verified results,\nchecks, blockers and next steps. Never store passwords or tokens here.\nA saved edit or Git commit does not prove correctness.\n',
     '.hermes-project/PLAN.md': '# Plan\n\nNo plan recorded yet. Hermes should record the objective and actionable steps\nbefore substantial work, and mark progress based on evidence.\n',
     '.hermes-project/CHECKPOINT.md': '# Checkpoint\n\nNo verified project summary recorded yet. See tasks/TASK-*.md for bridge-recorded\ntask outcomes, including failures. Hermes should update this summary after work.\n',
 }

@@ -7,6 +7,13 @@ import re
 import threading
 from contextlib import contextmanager
 from projects import ProjectError, read_bytes
+from provider_tools import explanation_request
+
+
+def task_requirements(prompt):
+    if explanation_request(prompt):
+        return 'Read-only explanation: inspect package/build configuration and the actual entry point, then follow relevant imports. For Node applications, inspect scripts.start: npm start follows that script, not necessarily package.json main (library import metadata). Read the actual startup file and follow its imports. Explain the program flow in chat using inspected files. Do not edit, create or delete application files, run tests, or continue earlier repair work. State unknowns and runtime dependencies honestly.'
+    return 'Save requested code as files under /workspace. Read existing files fully before editing and prefer small targeted patches. After EACH successful patch or write, use read_file to read back the complete saved file before finishing, even if a check passes. Never replace existing code through terminal shell writes. Run relevant checks using terminal tools, and report exact relative file paths and actual command results. If a tool fails, repair or report the failure; do not claim success from prose alone.'
 
 
 def manifest(root):
@@ -41,7 +48,7 @@ def evidence(job):
     if not good and re.search(r'HTTP (?:424|502|503|504)',failure):
         issue='The model provider failed before returning a usable response (HTTP '+re.search(r'HTTP (424|502|503|504)',failure)[1]+'). '+('No coding tools ran.' if not any(e.get('type')=='tool_use' for e in events) else 'Review the tool results for saved changes.')
     if not good and 'Provider tool-calling backend is unavailable' in failure:
-        issue='The provider’s tool-calling backend is unavailable: its internal endpoint returned HTTP 404. Hermes could not receive a tool action. The provider backend must be repaired before retrying.'
+        issue='The provider’s tool-calling backend is unavailable: its internal completion request returned HTTP 404. This can indicate a crashed inference worker, not a missing URL. Check provider runtime health before retrying.'
     calls={e.get('tool_call_id'):e for e in events if e.get('type')=='tool_use'}
     commands=[]
     for event in events:
@@ -57,9 +64,56 @@ def evidence(job):
         commands.append({'command':command[:1000],'exit_code':result.get('exit_code'),
                          'output':str(result.get('output') or result.get('stdout') or '')[:5000],
                          'is_error':bool(event.get('is_error') or result.get('error'))})
+    if not good and 'exceeded the 600-second execution limit' in failure:
+        issue='Execution reached the 600-second limit before completion. Saved changes may be incomplete.'
+    elif not good and 'Automatic file-edit recovery failed' in failure:
+        issue='File-edit recovery could not be verified. The overwrite protection remains enabled.'
     return {'verified':good,'answer':str(final.get('text') or '')[:16000] if good else '',
             'issue':issue or ('Task execution failed; completion is not verified.' if not good else None),
             'commands':commands[-5:]}
+
+
+def code_symbols(root, paths):
+    result={}
+    for path in list(paths)[:128]:
+        if not path.endswith('.js'):continue
+        try:text=read_bytes(root,path).decode('utf-8')
+        except (OSError,ProjectError,UnicodeError):continue
+        result[path]=sorted(set(re.findall(r'\bfunction\s+([A-Za-z_$][\w$]*)\s*\(',text)))
+    return result
+
+
+def verify_artifacts(result, prompt, before_symbols=None, after_symbols=None):
+    if not result.get('verified'):return result
+    paths={f['path'] for f in result.get('files',[])}
+    expected=set(re.findall(r'(?<![\w/])([\w./-]+\.(?:js|ts|py|go|rs|html|json))\b',prompt))
+    expected={p for p in expected if p.lower() not in {'node.js','react.js','next.js','express.js','vue.js'}}
+    normalized=[]
+    for path in expected:
+        path=path.removeprefix('/workspace/')
+        while path.startswith('./'):path=path[2:]
+        normalized.append(path)
+    missing=[p for p in normalized if p not in paths]
+    read_only=bool(re.search(r'\bread.only\b|\bdo not edit\b',prompt,re.I))
+    action=not read_only and bool(re.search(r'\b(create|write|implement|build|add|modify|fix|change|update|generate)\b',prompt,re.I))
+    program=action and bool(re.search(r'\b(app|application|api|program|script|website)\b',prompt,re.I))
+    code=[p for p in paths if re.search(r'\.(?:js|ts|jsx|tsx|py|go|rs|html|java|c|cpp|sh)$',p)]
+    checks=[c for c in result.get('commands',[]) if c.get('exit_code')==0 and not c.get('is_error') and re.search(r'(?:^|&&|;)\s*(?:node\b|python[3]?\b|pytest\b|npm\s+(?:test\b|run\s+(?:test|lint|build|check)\b)|cargo\s+(?:test|check)\b|go\s+test\b)',c.get('command',''))]
+    tests=[c for c in checks if re.search(r'(?:npm\s+(?:test|run\s+test)|--test|pytest|(?:^|[/\s])test[\w./-]*|cargo\s+test|go\s+test)',c.get('command',''))]
+    claims_tests=bool(re.search(r'(?:all tests passed|tests? (?:passed|pass successfully)|tests created.*pass)',result.get('answer',''),re.I))
+    issue=None
+    if before_symbols and re.search(r'\bpreserve\b[^.\n]{0,80}\b(?:handlers|functions)\b',prompt,re.I):
+        removed=[]
+        for path,names in before_symbols.items():
+            removed.extend(path+': '+name for name in set(names)-set((after_symbols or {}).get(path,[])))
+        if removed:issue='Preservation check failed; existing functions were removed: '+', '.join(sorted(removed))+'.'
+    if issue:pass
+    elif missing:issue='Requested files were not saved: '+', '.join(sorted(missing))+'.'
+    elif program and not code:issue='No application code files were observed; configuration or documentation alone does not complete this request.'
+    elif program and not checks:issue='Application changes have no successful runtime, syntax, build or test check on record.'
+    elif (claims_tests or (action and re.search(r'\b(?:tests?|npm test)\b',prompt,re.I))) and not tests:issue='No successful test command was recorded. The model’s claim that tests passed is not verified.'
+    if issue:result.update(verified=False,answer='',issue=issue)
+    return result
 
 
 def live_events(job):
@@ -148,6 +202,8 @@ class CodingService:
             db.execute('CREATE TABLE IF NOT EXISTS coding_requests(uid TEXT, request_id TEXT, project_id TEXT, job_id TEXT, chat_id TEXT, before_files TEXT, PRIMARY KEY(uid,request_id))')
             if 'result_json' not in [r[1] for r in db.execute('PRAGMA table_info(coding_requests)')]:
                 db.execute('ALTER TABLE coding_requests ADD COLUMN result_json TEXT')
+            if 'before_symbols' not in [r[1] for r in db.execute('PRAGMA table_info(coding_requests)')]:
+                db.execute('ALTER TABLE coding_requests ADD COLUMN before_symbols TEXT')
 
     @contextmanager
     def db(self):
@@ -233,21 +289,23 @@ class CodingService:
                     db.execute('INSERT OR REPLACE INTO coding_conversations VALUES(?,?,?,?)',(uid,cid,project['id'],chat_id))
                     db.execute('DELETE FROM coding_pending WHERE uid=? AND conversation=?',(uid,cid))
                 before=manifest(project['root'])
+                symbols=code_symbols(project['root'],before)
                 context=body.get('context','')
                 if not isinstance(context,str):raise ProjectError('Invalid conversation context')
-                context=context[:max(0,min(6000,24000-len(prompt)-200))]
+                context='' if explanation_request(prompt) else context[:max(0,min(6000,24000-len(prompt)-200))]
                 result=self.projects.dispatch(user,{'action':'run','kind':'agent','project_id':project['id'],'chat_id':chat_id,
-                    'prompt':prompt+'\n\nCompletion requirements: Save requested code as files under /workspace, run relevant checks using terminal tools, and report exact relative file paths and actual command results. If a tool fails, repair or report the failure; do not claim success from prose alone.'+ ('\n\nHistorical conversation context (unverified; inspect disk rather than trusting earlier success claims):\n'+context if context else '')})
+                    'prompt':prompt+'\n\nCompletion requirements: '+task_requirements(prompt)+ ('\n\nHistorical conversation context (unverified; inspect disk rather than trusting earlier success claims):\n'+context if context else '')})
                 with self.db() as db:
-                    db.execute('INSERT INTO coding_requests(uid,request_id,project_id,job_id,chat_id,before_files) VALUES(?,?,?,?,?,?)',(uid,request_id,project['id'],result['job_id'],chat_id,json.dumps(before)))
+                    db.execute('INSERT INTO coding_requests(uid,request_id,project_id,job_id,chat_id,before_files,before_symbols) VALUES(?,?,?,?,?,?,?)',(uid,request_id,project['id'],result['job_id'],chat_id,json.dumps(before),json.dumps(symbols)))
                 return {'project_id':project['id'],'project_name':project.get('name','Project'),'job_id':result['job_id'],'chat_id':chat_id}
         if action=='status':
             jid=body.get('job_id')
             with self.db() as db:
-                row=db.execute('SELECT project_id,chat_id,before_files,result_json FROM coding_requests WHERE uid=? AND job_id=?',(uid,jid)).fetchone()
+                row=db.execute('SELECT project_id,chat_id,before_files,result_json,before_symbols FROM coding_requests WHERE uid=? AND job_id=?',(uid,jid)).fetchone()
                 if not row:raise ProjectError('Coding task not found',404)
             project=self.projects.project(uid,row[0])
-            if row[3]:return json.loads(row[3])
+            frozen=json.loads(row[3]) if row[3] else None
+            if frozen and (not frozen.get('verified') or frozen.get('verification_version')==2):return frozen
             jobs=self.projects.dispatch(user,{'action':'jobs','project_id':row[0],'chat_id':row[1]})['jobs']
             job=next((j for j in jobs if j['id']==jid),None)
             if not job:raise ProjectError('Coding task not found',404)
@@ -256,12 +314,16 @@ class CodingService:
                 return result
             before=json.loads(row[2]);after=manifest(project['root'])
             result.update(evidence(job))
-            result['files']=[{'path':p,'sha':sha,'changed':before.get(p)!=sha} for p,sha in after.items()]
+            result['files']=frozen['files'] if frozen else [{'path':p,'sha':sha,'changed':before.get(p)!=sha} for p,sha in after.items()]
             prompt=job.get('prompt','').split('\n\nCompletion requirements:')[0]
-            if result['verified'] and re.search(r'\b(create|write|implement|build|add|modify|fix|change|update|generate)\b',prompt,re.I):
+            if result['verified'] and not re.search(r'\bread.only\b|\bdo not edit\b',prompt,re.I) and re.search(r'\b(create|write|implement|build|add|modify|fix|change|update|generate)\b',prompt,re.I):
                 if not any(f['changed'] for f in result['files']):
                     result.update(verified=False,answer='',issue='No created or modified program files were observed. Completion is not verified.')
+            if (explanation_request(prompt) or re.search(r'\bread.only\b|\bdo not edit\b',prompt,re.I)) and (any(f.get('changed') for f in result['files']) or set(before)-set(after)):
+                result.update(verified=False,answer='',issue='Unexpected file changes were observed during a read-only request. Review the Git diff before continuing.')
+            verify_artifacts(result,prompt,json.loads(row[4] or '{}'),code_symbols(project['root'],after))
+            result['verification_version']=2
             with self.db() as db:
-                db.execute('UPDATE coding_requests SET result_json=? WHERE uid=? AND job_id=? AND result_json IS NULL',(json.dumps(result),uid,jid))
+                db.execute('UPDATE coding_requests SET result_json=? WHERE uid=? AND job_id=?',(json.dumps(result),uid,jid))
             return result
         raise ProjectError('Unsupported coding action')
