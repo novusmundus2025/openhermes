@@ -1,0 +1,22 @@
+name: Recovery regression tests
+on:
+  push:
+    paths: ['deploy/*watchdog*', 'deploy/mlx_runtime_health.py', 'test_*watchdog.py', 'test_mlx_runtime_health.py', '.github/workflows/recovery-tests.yml']
+  pull_request:
+    paths: ['deploy/*watchdog*', 'deploy/mlx_runtime_health.py', 'test_*watchdog.py', 'test_mlx_runtime_health.py', '.github/workflows/recovery-tests.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  recovery:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ['3.11', '3.12']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m unittest test_contributor_watchdog test_mac_runtime_watchdog test_mlx_runtime_health
