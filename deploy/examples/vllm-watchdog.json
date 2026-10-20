@@ -1,0 +1,18 @@
+{
+  "enabled": false,
+  "backend": "vllm",
+  "url": "http://127.0.0.1:8000",
+  "model": "SET_EXACT_INSTALLED_MODEL",
+  "contributor_config": "/home/USER/.opengpu/config.json",
+  "probe_timeout": 45,
+  "interval": 60,
+  "startup_timeout": 300,
+  "target": {
+    "manager": "systemd-user",
+    "name": "vllm.service"
+  },
+  "agent_target": {
+    "manager": "systemd-user",
+    "name": "contributor.service"
+  }
+}

@@ -1,0 +1,14 @@
+[Unit]
+Description=Contributor inference health and recovery
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/openhermes
+ExecStart=/usr/bin/python3 -m deploy.contributor_watchdog %h/.opengpu/runtime-watchdog.json
+Restart=on-failure
+RestartSec=30
+UMask=0077
+
+[Install]
+WantedBy=default.target
