@@ -202,6 +202,11 @@ class Pipe:
                     if message.get('role') in ('user','assistant') and isinstance(message.get('content'),str):
                         history.append(message['role']+': '+message['content'][:1500])
                 started=await api({'action':'start','conversation_id':cid,'request_id':uuid.uuid4().hex,'prompt':latest,'context':'\n'.join(history)[-6000:]})
+                if started.get('state')=='choose_project':
+                    final_status='Choose a project'
+                    yield started['answer']+'\n\n'+ '\n'.join('- '+inline(p['name'])+' — reply '+inline('/use-project '+(p['name'] if sum(q['name'].casefold()==p['name'].casefold() for q in started['projects'])==1 else p['id'])) for p in started['projects'])+'\n\nOr reply `/new-project Your project name` to start separately. I’ll then run your original task.'
+                    return
+                yield '**Working in: '+inline(started.get('project_name','Project'))+'** · [Open project](/projects/#'+quote(started['project_id'],safe='')+')\n\n'
                 previous_events=[]
                 if __event_emitter__:
                     await __event_emitter__({'type':'status','data':{'description':'Preparing your workspace…','done':False}})

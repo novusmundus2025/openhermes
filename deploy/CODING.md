@@ -53,3 +53,6 @@ then converts it to a verified protocol failure rather than displaying success
 prose. Each inference HTTP call is capped at 90 seconds within the existing
 600-second agent budget. Runtime integration also requires native Hermes, Docker
 and an available inference provider.
+
+
+Project routing: a new Open WebUI chat no longer implies a new project. Distinctive project-name words select a unique owned project; follow-ups retain the mapped project. Ambiguous requests and requests to build a different application pause before execution. Reply `/use-project Project name` (or its ID for duplicate names) or `/new-project New name`; the pending original task then runs. A new account with no projects gets its first workspace automatically. These are conservative name/context rules, not an inference-based semantic classifier. Existing mappings and project files are preserved.

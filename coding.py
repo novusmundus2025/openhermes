@@ -57,11 +57,40 @@ def evidence(job):
             'commands':commands[-5:]}
 
 
+def live_events(job):
+    events=job.get('events') or []
+    if isinstance(events,str):events=json.loads(events)
+    result=[]
+    for event in events[-300:]:
+        kind=event.get('type')
+        if kind not in ('text','tool_use','tool_result'):continue
+        item={k:event[k] for k in ('type','name','tool_call_id','timestamp','is_error') if k in event}
+        if kind=='text':item['text']=str(event.get('text') or '')[:16000]
+        elif kind=='tool_use':
+            args=event.get('input') or {}
+            item['input']={k:str(args[k])[:4000] for k in ('command','path','file_path') if k in args}
+        else:item['output']=str(event.get('output') or '')[:6000]
+        result.append(item)
+    return result
+
+
+def project_matches(prompt, projects):
+    # Require distinctive project words; generic stack/task words cannot select a workspace.
+    ignored=set('supercoder create build application app project api node js react python code program working want this that with from here please add fix update the and for'.split())
+    words=set(re.findall(r'[a-z0-9]+',prompt.lower()))
+    matches=[]
+    for project in projects:
+        tokens=set(re.findall(r'[a-z0-9]+',project.get('name','').lower()))-ignored
+        if tokens and tokens <= words:matches.append(project)
+    return matches
+
+
 class CodingService:
     def __init__(self, projects):
         self.projects=projects
         self.lock=threading.RLock()
         with self.db() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS coding_pending(uid TEXT, conversation TEXT, prompt TEXT, PRIMARY KEY(uid,conversation))')
             db.execute('CREATE TABLE IF NOT EXISTS coding_conversations(uid TEXT, conversation TEXT, project_id TEXT, chat_id TEXT, PRIMARY KEY(uid,conversation))')
             db.execute('CREATE TABLE IF NOT EXISTS coding_requests(uid TEXT, request_id TEXT, project_id TEXT, job_id TEXT, chat_id TEXT, before_files TEXT, PRIMARY KEY(uid,request_id))')
             if 'result_json' not in [r[1] for r in db.execute('PRAGMA table_info(coding_requests)')]:
@@ -113,17 +142,42 @@ class CodingService:
                     existing=db.execute('SELECT project_id,job_id,chat_id FROM coding_requests WHERE uid=? AND request_id=?',(uid,request_id)).fetchone()
                     mapping=db.execute('SELECT project_id,chat_id FROM coding_conversations WHERE uid=? AND conversation=?',(uid,cid)).fetchone()
                 if existing:
-                    self.projects.project(uid,existing[0])
-                    return dict(zip(('project_id','job_id','chat_id'),existing))
-                if mapping:
-                    project=self.projects.project(uid,mapping[0])
-                    chat_id=mapping[1]
-                else:
-                    name='SuperCoder '+re.sub(r'[^\w -]','',prompt.strip().splitlines()[0])[:40]
-                    project=self.projects.dispatch(user,{'action':'create','name':name})['project']
-                    chat_id=self.projects.dispatch(user,{'action':'new_chat','project_id':project['id']})['chat']['id']
+                    existing_project=self.projects.project(uid,existing[0])
+                    return dict(zip(('project_id','job_id','chat_id'),existing),project_name=existing_project.get('name','Project'))
+                projects=self.projects.dispatch(user,{'action':'list'})['projects']
+                use=re.fullmatch(r'/use-project\s+(.+)',prompt.strip(),re.I)
+                new=re.match(r'^(?:/new-project\s+|(?:create|start|build)\s+(?:a\s+)?(?:new|different|separate)\s+project\b[: ]*)(.*)',prompt.strip(),re.I|re.S)
+                with self.db() as db:
+                    pending=db.execute('SELECT prompt FROM coding_pending WHERE uid=? AND conversation=?',(uid,cid)).fetchone()
+                selected=None
+                if use:
+                    choices=[p for p in projects if p['id']==use[1] or p.get('name','').casefold()==use[1].casefold()]
+                    if len(choices)!=1:raise ProjectError('Project name is missing or ambiguous. Use the project identifier shown in /projects.')
+                    selected=self.projects.project(uid,choices[0]['id'])
+                    if not pending:raise ProjectError('Send the coding task first, then select its project.')
+                    prompt=pending[0]
+                elif not new:
+                    matches=project_matches(prompt,projects)
+                    if len(matches)==1:selected=matches[0]
+                    elif mapping and not matches and not re.search(r'\b(?:create|build|start)\b.*\b(?:new|different|separate|app|application|system|website)\b',prompt,re.I):
+                        selected=self.projects.project(uid,mapping[0])
+                if not selected and not new and projects:
                     with self.db() as db:
-                        db.execute('INSERT INTO coding_conversations VALUES(?,?,?,?)',(uid,cid,project['id'],chat_id))
+                        db.execute('INSERT OR REPLACE INTO coding_pending VALUES(?,?,?)',(uid,cid,prompt))
+                    return {'state':'choose_project','projects':[{'id':p['id'],'name':p['name']} for p in projects],
+                            'answer':'Which project is this task for? No files have been edited.'}
+                if new or (not selected and not projects):
+                    name=(new[1].strip() if new else prompt.strip().splitlines()[0])
+                    if not name:raise ProjectError('Give the new project a name after /new-project.')
+                    selected=self.projects.dispatch(user,{'action':'create','name':re.sub(r'[^\w -]','',name)[:60]})['project']
+                    if pending and new:prompt=pending[0]
+                project=selected
+                if mapping and mapping[0]==project['id']:chat_id=mapping[1]
+                else:
+                    chat_id=self.projects.dispatch(user,{'action':'new_chat','project_id':project['id']})['chat']['id']
+                with self.db() as db:
+                    db.execute('INSERT OR REPLACE INTO coding_conversations VALUES(?,?,?,?)',(uid,cid,project['id'],chat_id))
+                    db.execute('DELETE FROM coding_pending WHERE uid=? AND conversation=?',(uid,cid))
                 before=manifest(project['root'])
                 context=body.get('context','')
                 if not isinstance(context,str):raise ProjectError('Invalid conversation context')
@@ -132,7 +186,7 @@ class CodingService:
                     'prompt':prompt+'\n\nCompletion requirements: Save requested code as files under /workspace, run relevant checks using terminal tools, and report exact relative file paths and actual command results. If a tool fails, repair or report the failure; do not claim success from prose alone.'+ ('\n\nHistorical conversation context (unverified; inspect disk rather than trusting earlier success claims):\n'+context if context else '')})
                 with self.db() as db:
                     db.execute('INSERT INTO coding_requests(uid,request_id,project_id,job_id,chat_id,before_files) VALUES(?,?,?,?,?,?)',(uid,request_id,project['id'],result['job_id'],chat_id,json.dumps(before)))
-                return {'project_id':project['id'],'job_id':result['job_id'],'chat_id':chat_id}
+                return {'project_id':project['id'],'project_name':project.get('name','Project'),'job_id':result['job_id'],'chat_id':chat_id}
         if action=='status':
             jid=body.get('job_id')
             with self.db() as db:
@@ -143,7 +197,7 @@ class CodingService:
             jobs=self.projects.dispatch(user,{'action':'jobs','project_id':row[0],'chat_id':row[1]})['jobs']
             job=next((j for j in jobs if j['id']==jid),None)
             if not job:raise ProjectError('Coding task not found',404)
-            result={'project_id':row[0],'job_id':jid,'state':job['state'],'workspace':project['root']}
+            result={'project_id':row[0],'job_id':jid,'state':job['state'],'workspace':project['root'],'events':live_events(job)}
             if job['state'] in ('queued','running'):
                 return result
             before=json.loads(row[2]);after=manifest(project['root'])

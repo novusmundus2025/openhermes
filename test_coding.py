@@ -22,9 +22,10 @@ class FakeProjects:
         return project
     def dispatch(self,user,body):
         self.calls.append(body)
+        if body['action']=='list':return {'projects':[p for p in self.records.values() if p['user_id']==user['id']]}
         if body['action']=='create':
             pid=uuid.uuid4().hex;root=self.root/pid;root.mkdir()
-            self.records[pid]={'id':pid,'root':str(root),'user_id':user['id']}
+            self.records[pid]={'id':pid,'root':str(root),'user_id':user['id'],'name':body['name']}
             return {'project':self.records[pid]}
         project=self.project(user['id'],body['project_id'])
         if body['action']=='new_chat':return {'chat':{'id':uuid.uuid4().hex}}
@@ -47,7 +48,28 @@ class CodingTests(unittest.TestCase):
         self.assertEqual(first['project_id'],second['project_id'])
         self.assertNotEqual(first['project_id'],other['project_id'])
         with self.assertRaises(ProjectError):self.service.dispatch({'id':'bob'},{'action':'status','job_id':first['job_id']})
-        self.assertNotEqual(first['project_id'],self.start(cid='other-chat')['project_id'])
+        self.assertEqual(self.start(cid='other-chat')['state'],'choose_project')
+    def test_named_project_reused_in_new_chat_and_choice_preserves_task(self):
+        first=self.start(prompt='/new-project enrollment')
+        same=self.start(cid='another',prompt='Add swagger to enrollment')
+        self.assertEqual(first['project_id'],same['project_id'])
+        choice=self.start(cid='unclear',prompt='Add swagger docs')
+        self.assertEqual(choice['state'],'choose_project')
+        count=len(self.projects.jobs)
+        selected=self.start(cid='unclear',prompt='/use-project '+first['project_id'])
+        self.assertEqual(selected['project_id'],first['project_id'])
+        self.assertTrue(self.projects.jobs[selected['job_id']]['prompt'].startswith('Add swagger docs'))
+        self.assertEqual(len(self.projects.jobs),count+1)
+        with self.assertRaises(ProjectError):self.start(uid='bob',cid='x',prompt='/use-project '+first['project_id'])
+
+    def test_different_app_does_not_silently_use_current_project(self):
+        first=self.start(prompt='/new-project enrollment')
+        choice=self.start(prompt='Build a shopping website')
+        self.assertEqual(choice['state'],'choose_project')
+        new=self.start(prompt='/new-project shop')
+        self.assertNotEqual(first['project_id'],new['project_id'])
+        self.assertTrue(self.projects.jobs[new['job_id']]['prompt'].startswith('Build a shopping website'))
+
     def test_request_retry_is_idempotent(self):
         rid=uuid.uuid4().hex
         self.assertEqual(self.start(rid=rid),self.start(rid=rid))
