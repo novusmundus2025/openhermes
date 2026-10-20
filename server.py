@@ -243,7 +243,12 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b'data: [DONE]\n\n')
             self.wfile.flush()
         except HTTPError as exc:
-            self.respond(exc.code, {'error': 'Model provider rejected the request'})
+            detail=exc.read(4096).decode(errors='replace')
+            if exc.code==502 and 'native OpenAI tool completion failed' in detail and 'status code 404' in detail:
+                # A missing dependency is not a transient model overload. Avoid futile 5xx retries.
+                self.respond(424, {'error': 'Provider tool-calling backend is unavailable: its internal completion endpoint returned HTTP 404 (upstream HTTP 502). No tool response was received.'})
+            else:
+                self.respond(exc.code, {'error': 'Model provider rejected the request (HTTP '+str(exc.code)+')'})
         except (URLError, TimeoutError, OSError, ValueError):
             self.respond(503, {'error': 'Model provider unavailable'})
 

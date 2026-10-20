@@ -37,6 +37,11 @@ def evidence(job):
     final=next((e for e in reversed(events) if e.get('type')=='result'),{})
     if not good and 'Unknown execution blocks this session' in str(final.get('error','')):
         issue='The previous native task was interrupted and its execution state is unresolved. Inspect the project execution log. Use /new-session to continue with a fresh native conversation while preserving project files; no files are rolled back.'
+    failure=str(final.get('error') or '')+' '+str(final.get('text') or '')
+    if not good and re.search(r'HTTP (?:424|502|503|504)',failure):
+        issue='The model provider failed before returning a usable response (HTTP '+re.search(r'HTTP (424|502|503|504)',failure)[1]+'). '+('No coding tools ran.' if not any(e.get('type')=='tool_use' for e in events) else 'Review the tool results for saved changes.')
+    if not good and 'Provider tool-calling backend is unavailable' in failure:
+        issue='The provider’s tool-calling backend is unavailable: its internal endpoint returned HTTP 404. Hermes could not receive a tool action. The provider backend must be repaired before retrying.'
     calls={e.get('tool_call_id'):e for e in events if e.get('type')=='tool_use'}
     commands=[]
     for event in events:

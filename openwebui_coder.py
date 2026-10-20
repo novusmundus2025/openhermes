@@ -42,7 +42,9 @@ def result_message(data, show_workspace=False):
         text+='\n\n**Not verified.** '+display_text(data.get('issue') or 'Execution did not finish successfully.')
         if changed:text+=' Your saved changes are available below.'
         issue=str(data.get('issue') or '').lower()
-        if 'session' in issue and ('interrupted' in issue or 'unresolved' in issue):
+        if 'provider' in issue and ('unavailable' in issue or 'failed' in issue):
+            text+='\n\nNext: restore the provider’s tool-calling service, then retry in this same project.'
+        elif 'session' in issue and ('interrupted' in issue or 'unresolved' in issue):
             text+='\n\nNext: inspect the log, then use `/new-session` to continue with the same files.'
         else:
             text+='\n\nNext: open the execution log to inspect the remaining checks.'
@@ -76,6 +78,21 @@ def result_message(data, show_workspace=False):
         text+='\n\n**GX10 workspace folder**\n\n```text\n'+str(data.get('workspace','')).replace('```','` ` `')+'\n```'
     else:text+='\n\nUse `/workspace` for the GX10 folder path.'
     return text
+
+
+def progress_description(events, elapsed, idle):
+    calls={e.get('tool_call_id'):e for e in events if e.get('type')=='tool_use'}
+    results=[e for e in events if e.get('type')=='tool_result']
+    returned={e.get('tool_call_id') for e in results}
+    pending=[e for key,e in calls.items() if key not in returned]
+    if pending:
+        call=pending[-1];args=call.get('input') or {}
+        target=display_text(args.get('path') or args.get('command') or '').removeprefix('/workspace/').replace('\n',' ')[:75]
+        stage={'terminal':'Running command','read_file':'Reading file','write_file':'Saving file','patch':'Editing file'}.get(call.get('name'),'Running tool')
+        if target:stage+=': '+target
+    else:stage='Waiting for model response' if not results else 'Waiting for model’s next step'
+    failures=sum(bool(tool_failed(e)) for e in results)
+    return stage+' · '+str(int(elapsed))+'s elapsed · '+str(len(results))+' tool results'+(' · '+str(failures)+' failed' if failures else '')+' · '+str(int(idle))+'s since activity'
 
 
 def event_updates(previous, current):
@@ -201,6 +218,8 @@ class Pipe:
                 for message in messages[-7:-1]:
                     if message.get('role') in ('user','assistant') and isinstance(message.get('content'),str):
                         history.append(message['role']+': '+message['content'][:1500])
+                if __event_emitter__:
+                    await __event_emitter__({'type':'status','data':{'description':'Selecting project and preparing task…','done':False}})
                 started=await api({'action':'start','conversation_id':cid,'request_id':uuid.uuid4().hex,'prompt':latest,'context':'\n'.join(history)[-6000:]})
                 if started.get('state')=='choose_project':
                     final_status='Choose a project'
@@ -208,13 +227,18 @@ class Pipe:
                     return
                 yield '**Working in: '+inline(started.get('project_name','Project'))+'** · [Open project](/projects/#'+quote(started['project_id'],safe='')+')\n\n'
                 previous_events=[]
+                progress_started=time.monotonic()
+                last_activity=progress_started
+                last_heartbeat=0
                 if __event_emitter__:
-                    await __event_emitter__({'type':'status','data':{'description':'Preparing your workspace…','done':False}})
+                    await __event_emitter__({'type':'status','data':{'description':'Starting Hermes…','done':False}})
                 deadline=time.monotonic()+660
                 while time.monotonic()<deadline:
                     data=await api({'action':'status','job_id':started['job_id']})
                     current_events=data.get('events') or []
-                    for event in event_updates(previous_events,current_events):
+                    updates=event_updates(previous_events,current_events)
+                    if updates:last_activity=time.monotonic()
+                    for event in updates:
                         trace.append(event)
                         if event.get('type')=='text':
                             # Narrative progress stays in the execution log until its outcome is known.
@@ -226,6 +250,10 @@ class Pipe:
                         elif event.get('type')=='tool_use' and __event_emitter__:
                             await __event_emitter__({'type':'status','data':{'description':{'read_file':'Reading project files…','write_file':'Saving changes…','patch':'Applying changes…','terminal':'Running command…','recovery_verify':'Checking saved changes…'}.get(event.get('name'),'Working…'),'done':False}})
                     previous_events=current_events
+                    now=time.monotonic()
+                    if __event_emitter__ and data['state'] in ('queued','running') and now-last_heartbeat>=6:
+                        await __event_emitter__({'type':'status','data':{'description':progress_description(trace,now-progress_started,now-last_activity),'done':False}})
+                        last_heartbeat=now
                     if data['state'] not in ('queued','running'):
                         final_status='Task verified' if data.get('verified') else 'Needs attention'
                         yield result_message(data)

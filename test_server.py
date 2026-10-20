@@ -135,6 +135,24 @@ class ProvisioningTests(unittest.TestCase):
         with server.connect() as db:
             self.assertEqual(db.execute('select prompt_tokens,completion_tokens,credits_microunits from usage_events').fetchone(), (210, 11, 3*SCALE))
 
+    def test_missing_provider_tool_endpoint_is_failed_dependency(self):
+        from urllib.error import HTTPError
+        profile=server.ensure_user({'id':'alice'},lambda p:None)
+        service=server.ThreadingHTTPServer(('127.0.0.1',0),server.Handler)
+        service.settings={'upstream_key':'a'*64,'model_upstream':'https://provider/v1'}
+        thread=threading.Thread(target=service.serve_forever,daemon=True);thread.start()
+        key=hmac.new(b'a'*64,profile.encode(),hashlib.sha256).hexdigest()
+        error=HTTPError('https://provider/v1/chat/completions',502,'bad gateway',{},io.BytesIO(b'native OpenAI tool completion failed: internal: status code 404 secret=not-for-display'))
+        try:
+            with patch.object(server,'urlopen',side_effect=error) as upstream:
+                request=Request('http://127.0.0.1:'+str(service.server_port)+'/provider/'+profile+'/v1/chat/completions',data=b'{"stream":false}',headers={'Authorization':'Bearer '+key})
+                with self.assertRaises(HTTPError) as caught:urlopen(request)
+                self.assertEqual(caught.exception.code,424)
+                text=caught.exception.read().decode()
+                self.assertIn('internal completion endpoint returned HTTP 404',text)
+                self.assertNotIn('not-for-display',text);self.assertEqual(upstream.call_count,1)
+        finally:service.shutdown();service.server_close()
+
     def test_provider_adapter_supplies_usage_and_tool_call_indexes(self):
         profile = server.ensure_user({'id': 'alice'}, lambda p: None)
         service = server.ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)

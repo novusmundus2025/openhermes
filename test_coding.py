@@ -7,7 +7,7 @@ import unittest
 import uuid
 from unittest.mock import patch
 from coding import CodingService, evidence, clean_project_name, fallback_project_name, suggest_project_name
-from openwebui_coder import Pipe, result_message, conversation_id, tool_summary, git_intent
+from openwebui_coder import Pipe, result_message, conversation_id, tool_summary, git_intent, progress_description
 from projects import ProjectError
 
 
@@ -138,6 +138,21 @@ class CodingTests(unittest.TestCase):
 
 
 class CoderFunctionTests(unittest.TestCase):
+    def test_progress_reports_waiting_and_actual_tool_activity(self):
+        self.assertIn('Waiting for model response',progress_description([],72,72))
+        self.assertIn('72s elapsed',progress_description([],72,72))
+        events=[{'type':'tool_use','tool_call_id':'a','name':'terminal','input':{'command':'npm test'}}]
+        self.assertIn('Running command: npm test',progress_description(events,80,8))
+        events.append({'type':'tool_result','tool_call_id':'a','name':'terminal','output':'{"exit_code":1}'})
+        value=progress_description(events,82,0)
+        self.assertIn('1 tool results',value);self.assertIn('1 failed',value)
+        self.assertIn('next step',value)
+
+    def test_missing_provider_dependency_explains_failure(self):
+        value=evidence({'state':'failed','exit_code':1,'events':[{'type':'result','exit_code':1,'error':'HTTP 424: Provider tool-calling backend is unavailable internal HTTP 404'}]})
+        self.assertFalse(value['verified']);self.assertIn('HTTP 404',value['issue'])
+        self.assertNotIn('Agent reported an execution failure',value['issue'])
+
     def test_partial_outcome_is_readable_without_html_or_server_path_dump(self):
         result=result_message({'project_id':'p','verified':False,'issue':'Execution failed',
              'workspace':'/private/account/workspace','files':[{'path':'server.js','changed':True}],
