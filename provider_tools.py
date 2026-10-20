@@ -192,15 +192,21 @@ def explanation_policy(request):
                     candidates=(resolved,) if resolved.endswith(('.js','.cjs','.mjs','.json')) else (resolved+'.js',resolved+'/index.js')
                     imports.add(candidates)
     pending=[group for group in sorted(imports) if not any(path in seen for path in group)]
-    if len(seen)>=8 or attempts>=12 or not result['tools']:
+    if len(seen)>=8 or attempts>=12 or not result['tools'] or (len(seen)>=2 and not pending):
         result['tool_choice']='none'
         options=result.get('chat_template_kwargs')
         if isinstance(options,dict):
+            if options.get('opengpu_native_tool_guard') is True:result['repetition_penalty']=1.1
             options.pop('opengpu_native_tool_guard',None);options.pop('opengpu_require_tool_call',None)
-        instruction='Inspection budget reached. Answer the explanation question now from inspected code. Explain the entry point, request flow, modules and data flow. State any gaps explicitly. Do not claim tests or edits.'
+        cap=1536
+        instruction='Inspection is finished. Answer in at most 400 words, with one clear startup-to-request-to-database flow. Do not repeat unknowns or duplicate lists. Inspection budget reached. Answer the explanation question now from inspected code. Explain the entry point, request flow, modules and data flow. State any gaps explicitly. Do not claim tests or edits.'
     else:
+        cap=512
         if len(seen)<2 or pending:result['tool_choice']='required'
         instruction='For Node apps, npm start follows package.json scripts.start; main describes library imports and may point to a legacy file. Read the startup script target before explaining execution. Read-only explanation task. Use read_file only as needed, beginning with package.json and its actual entry point, then follow imports. Answer once enough evidence is available. Do not edit files, run tests, or continue an earlier repair. Distinguish verified code flow from runtime assumptions.'
+    key='max_completion_tokens' if 'max_completion_tokens' in result else 'max_tokens'
+    current=result.get(key)
+    result[key]=min(current,cap) if type(current) is int and current>0 else cap
     if pending and result['tool_choice']!='none':instruction+=' Inspect these unresolved local imports before answering (alternative resolution paths in each group): '+json.dumps(pending)
     result.setdefault('messages',[]).append({'role':'system','content':instruction})
     return result
