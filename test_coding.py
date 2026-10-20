@@ -7,7 +7,7 @@ import unittest
 import uuid
 from unittest.mock import patch
 from coding import CodingService, evidence
-from openwebui_coder import Pipe, result_message, conversation_id
+from openwebui_coder import Pipe, result_message, conversation_id, tool_summary, git_intent
 from projects import ProjectError
 
 
@@ -94,6 +94,32 @@ class CodingTests(unittest.TestCase):
 
 
 class CoderFunctionTests(unittest.TestCase):
+    def test_partial_outcome_is_readable_without_html_or_server_path_dump(self):
+        result=result_message({'project_id':'p','verified':False,'issue':'Execution failed',
+             'workspace':'/private/account/workspace','files':[{'path':'server.js','changed':True}],
+             'commands':[{'command':'cd /workspace && npm test','exit_code':1,'output':'A check failed'}]})
+        self.assertIn('Changes saved · checks incomplete',result)
+        self.assertIn('Not verified',result)
+        self.assertIn('server.js',result)
+        self.assertNotIn('<details',result);self.assertNotIn('<summary',result)
+        self.assertNotIn('/private/account/workspace',result)
+        self.assertIn('cd /workspace && npm test',result)
+        self.assertNotIn('&amp;',result)
+    def test_workspace_location_is_explicit_not_lost(self):
+        result=result_message({'project_id':'p','state':'workspace','workspace':'/actual/user/project'},show_workspace=True)
+        self.assertIn('/actual/user/project',result)
+        self.assertNotIn('<details',result)
+    def test_install_output_is_not_mislabeled_as_verification_or_dumped_in_chat(self):
+        result=result_message({'project_id':'p','verified':False,'commands':[{'command':'cd /workspace && npm install','exit_code':0,'output':'npm warning '+('noisy details '*1000)}]})
+        self.assertIn('Latest command',result);self.assertNotIn('Latest check',result)
+        self.assertNotIn('noisy details',result);self.assertIn('diagnostics',result)
+    def test_compact_tool_status_and_existing_secure_git_routing(self):
+        event={'type':'tool_result','name':'terminal','output':'{"exit_code":0}'}
+        call={'input':{'command':'cd /workspace && npm install'}}
+        text=tool_summary(event,call)
+        self.assertIn('&&',text);self.assertNotIn('&amp;',text);self.assertNotIn('<summary',text)
+        self.assertEqual(git_intent('git push origin main')['operation'],'push')
+        self.assertIsNone(git_intent('Explain git branching'))
     def test_verified_file_links_and_real_command_output_in_chat(self):
         text=result_message({'project_id':'abc','verified':True,'answer':'Done','workspace':'/private/user/project',
              'files':[{'path':'hello world.js','changed':True}],
