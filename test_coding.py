@@ -258,3 +258,35 @@ class ExplanationRequirementsTests(__import__("unittest").TestCase):
         from coding import task_requirements
         self.assertIn("Read-only explanation",task_requirements("show me the complete flow of the program"))
         self.assertIn("Save requested code",task_requirements("Update server.js"))
+
+
+class RestructuringTests(unittest.TestCase):
+    def test_contract_is_framework_aware_and_not_applied_to_explanation(self):
+        from coding import task_requirements, restructuring_request
+        self.assertTrue(restructuring_request('update our folder structure'))
+        self.assertIn('canonical startup',task_requirements('restructure the application'))
+        self.assertNotIn('Restructuring contract',task_requirements('explain the program flow'))
+
+    def test_rejects_partial_restructure_and_syntax_only(self):
+        from coding import verify_structure
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);(root/'src/controllers').mkdir(parents=True)
+            (root/'package.json').write_text(json.dumps({'scripts':{'start':'node src/server.js'}}),encoding='utf-8')
+            (root/'server.js').write_text('const app=express(); app.listen(3000);',encoding='utf-8')
+            value={'verified':True,'answer':'Done','commands':[{'command':'node --check src/server.js','exit_code':0}]}
+            with patch('coding.read_bytes',side_effect=lambda root,path:(Path(root)/path).read_bytes()):
+                verify_structure(value,'restructure our application',root)
+            self.assertFalse(value['verified']);self.assertEqual(value['answer'],'')
+            for text in ('competing server','empty src/controllers','syntax alone','Git diff'):
+                self.assertIn(text,value['issue'])
+
+    def test_accepts_forwarding_entry_and_real_checks(self):
+        from coding import verify_structure
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            (root/'package.json').write_text(json.dumps({'scripts':{'start':'node src/server.js'}}),encoding='utf-8')
+            (root/'server.js').write_text("require('./src/server');",encoding='utf-8')
+            value={'verified':True,'answer':'Done','commands':[{'command':'npm test','exit_code':0},{'command':'git diff --stat','exit_code':0}]}
+            with patch('coding.read_bytes',side_effect=lambda root,path:(Path(root)/path).read_bytes()):
+                verify_structure(value,'refactor application',root)
+            self.assertTrue(value['verified'])

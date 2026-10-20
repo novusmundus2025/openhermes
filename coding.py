@@ -10,10 +10,41 @@ from projects import ProjectError, read_bytes
 from provider_tools import explanation_request
 
 
+def restructuring_request(prompt):
+    return not explanation_request(prompt) and bool(re.search(r"\b(?:restructur\w*|refactor\w*|reorganiz\w*|reorganis\w*)\b|\b(?:folder|directory|project) structure\b",prompt,re.I))
+
+
+def verify_structure(result,prompt,root):
+    if not result.get('verified') or not restructuring_request(prompt):return result
+    issues=[]
+    commands=result.get('commands',[])
+    if not any(c.get('exit_code')==0 and not c.get('is_error') and re.search(r'git\s+(?:diff|status)\b',c.get('command','')) for c in commands):
+        issues.append('no successful Git diff/status review was recorded')
+    if not any(c.get('exit_code')==0 and not c.get('is_error') and re.search(r'(?:npm\s+(?:test|run\s+(?:test|build|check))|--test|pytest|mvn|gradle|cargo\s+(?:test|check)|go\s+test|curl\b)',c.get('command','')) for c in commands):
+        issues.append('no successful test, build or startup smoke check was recorded (syntax alone is insufficient)')
+    root=Path(root)
+    try:
+        pkg=json.loads(read_bytes(root,'package.json'))
+    except (OSError,ProjectError,ValueError):pkg={}
+    start=(pkg.get('scripts') or {}).get('start','')
+    if re.search(r'\bnode\s+(?:\./)?src/server\.js\b',start) and (root/'server.js').is_file():
+        try:legacy=read_bytes(root,'server.js').decode('utf-8')
+        except (OSError,ProjectError,UnicodeError):legacy=''
+        if re.search(r'\.listen\s*\(|\b(?:express|mongoose)\s*\(',legacy):
+            issues.append('root server.js still contains a competing server implementation while npm start uses src/server.js; migrate callers and remove it or retain a documented forwarding wrapper')
+    for name in ('controllers','services','routes'):
+        folder=root/'src'/name
+        if folder.is_dir() and not folder.is_symlink() and not any(folder.iterdir()):
+            issues.append('unused empty src/'+name+' folder remains')
+    if issues:result.update(verified=False,answer='',issue='Restructuring incomplete: '+'; '.join(issues)+'.')
+    return result
+
+
 def task_requirements(prompt):
     if explanation_request(prompt):
         return 'Read-only explanation: inspect package/build configuration and the actual entry point, then follow relevant imports. For Node applications, inspect scripts.start: npm start follows that script, not necessarily package.json main (library import metadata). Read the actual startup file and follow its imports. Explain the program flow in chat using inspected files. Do not edit, create or delete application files, run tests, or continue earlier repair work. State unknowns and runtime dependencies honestly.'
-    return 'Save requested code as files under /workspace. Read existing files fully before editing and prefer small targeted patches. After EACH successful patch or write, use read_file to read back the complete saved file before finishing, even if a check passes. Never replace existing code through terminal shell writes. Run relevant checks using terminal tools, and report exact relative file paths and actual command results. If a tool fails, repair or report the failure; do not claim success from prose alone.'
+    extra=(' Restructuring contract: inspect the existing tree, startup/build configuration, imports and Git status first. Follow this language/framework conventions and project size; routes and controllers are not mandatory separate layers. Preserve existing behavior and public endpoints. Choose one canonical startup implementation; update scripts, imports, tests and documentation together. Remove obsolete implementations only after checking references; a compatibility entry point must forward to the canonical implementation. Centralize initialization (including database connection). Do not leave empty placeholder layers. Run relevant tests/build and a bounded startup smoke check; a syntax check alone cannot verify restructuring. Inspect final git diff/status, report moved/deleted files and any checks blocked by external dependencies. Do not claim completion if checks are blocked.' if restructuring_request(prompt) else '')
+    return 'Save requested code as files under /workspace. Read existing files fully before editing and prefer small targeted patches. After EACH successful patch or write, use read_file to read back the complete saved file before finishing, even if a check passes. Never replace existing code through terminal shell writes. Run relevant checks using terminal tools, and report exact relative file paths and actual command results. If a tool fails, repair or report the failure; do not claim success from prose alone.'+extra
 
 
 def manifest(root):
@@ -70,7 +101,7 @@ def evidence(job):
         issue='File-edit recovery could not be verified. The overwrite protection remains enabled.'
     return {'verified':good,'answer':str(final.get('text') or '')[:16000] if good else '',
             'issue':issue or ('Task execution failed; completion is not verified.' if not good else None),
-            'commands':commands[-5:]}
+            'commands':commands[-30:]}
 
 
 def code_symbols(root, paths):
@@ -95,7 +126,7 @@ def verify_artifacts(result, prompt, before_symbols=None, after_symbols=None):
         normalized.append(path)
     missing=[p for p in normalized if p not in paths]
     read_only=bool(re.search(r'\bread.only\b|\bdo not edit\b',prompt,re.I))
-    action=not read_only and bool(re.search(r'\b(create|write|implement|build|add|modify|fix|change|update|generate)\b',prompt,re.I))
+    action=not read_only and bool(re.search(r'\b(create|write|implement|build|add|modify|fix|change|update|generate|restructure|refactor|reorganize)\b',prompt,re.I))
     program=action and bool(re.search(r'\b(app|application|api|program|script|website)\b',prompt,re.I))
     code=[p for p in paths if re.search(r'\.(?:js|ts|jsx|tsx|py|go|rs|html|java|c|cpp|sh)$',p)]
     checks=[c for c in result.get('commands',[]) if c.get('exit_code')==0 and not c.get('is_error') and re.search(r'(?:^|&&|;)\s*(?:node\b|python[3]?\b|pytest\b|npm\s+(?:test\b|run\s+(?:test|lint|build|check)\b)|cargo\s+(?:test|check)\b|go\s+test\b)',c.get('command',''))]
@@ -316,12 +347,13 @@ class CodingService:
             result.update(evidence(job))
             result['files']=frozen['files'] if frozen else [{'path':p,'sha':sha,'changed':before.get(p)!=sha} for p,sha in after.items()]
             prompt=job.get('prompt','').split('\n\nCompletion requirements:')[0]
-            if result['verified'] and not re.search(r'\bread.only\b|\bdo not edit\b',prompt,re.I) and re.search(r'\b(create|write|implement|build|add|modify|fix|change|update|generate)\b',prompt,re.I):
-                if not any(f['changed'] for f in result['files']):
+            if result['verified'] and not re.search(r'\bread.only\b|\bdo not edit\b',prompt,re.I) and re.search(r'\b(create|write|implement|build|add|modify|fix|change|update|generate|restructure|refactor|reorganize)\b',prompt,re.I):
+                if not any(f['changed'] for f in result['files']) and not set(before)-set(after):
                     result.update(verified=False,answer='',issue='No created or modified program files were observed. Completion is not verified.')
             if (explanation_request(prompt) or re.search(r'\bread.only\b|\bdo not edit\b',prompt,re.I)) and (any(f.get('changed') for f in result['files']) or set(before)-set(after)):
                 result.update(verified=False,answer='',issue='Unexpected file changes were observed during a read-only request. Review the Git diff before continuing.')
             verify_artifacts(result,prompt,json.loads(row[4] or '{}'),code_symbols(project['root'],after))
+            verify_structure(result,prompt,project['root'])
             result['verification_version']=2
             with self.db() as db:
                 db.execute('UPDATE coding_requests SET result_json=? WHERE uid=? AND job_id=?',(json.dumps(result),uid,jid))
