@@ -56,3 +56,5 @@ and an available inference provider.
 
 
 Project routing: a new Open WebUI chat no longer implies a new project. Distinctive project-name words select a unique owned project; follow-ups retain the mapped project. Ambiguous requests and requests to build a different application pause before execution. Reply `/use-project Project name` (or its ID for duplicate names) or `/new-project New name`; the pending original task then runs. A new account with no projects gets its first workspace automatically. These are conservative name/context rules, not an inference-based semantic classifier. Existing mappings and project files are preserved.
+
+Automatic new-project names use one bounded request to the configured model (15 seconds, 80 output tokens). Only validated short names are accepted. Failure uses a concise local fallback; explicit short `/new-project` names are preserved. Naming usage is recorded through the existing credit tracker. Existing workspace paths are not moved automatically.

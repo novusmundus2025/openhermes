@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import uuid
 from unittest.mock import patch
-from coding import CodingService, evidence
+from coding import CodingService, evidence, clean_project_name, fallback_project_name, suggest_project_name
 from openwebui_coder import Pipe, result_message, conversation_id, tool_summary, git_intent
 from projects import ProjectError
 
@@ -69,6 +69,28 @@ class CodingTests(unittest.TestCase):
         new=self.start(prompt='/new-project shop')
         self.assertNotEqual(first['project_id'],new['project_id'])
         self.assertTrue(self.projects.jobs[new['job_id']]['prompt'].startswith('Build a shopping website'))
+
+    def test_project_names_are_short_and_explicit_names_preserved(self):
+        result=self.start(prompt='I want to create an application full enrollment api student course subject nodejs')
+        name=self.projects.records[result['project_id']]['name']
+        self.assertEqual(name,'Enrollment API')
+        self.assertLessEqual(len(name),48)
+        self.assertEqual(self.projects.records[self.start(cid='explicit',prompt='/new-project School Portal')['project_id']]['name'],'School Portal')
+        self.assertIsNone(clean_project_name('../workspace'))
+        self.assertIsNone(clean_project_name('I want to create an application'))
+
+    def test_llm_name_validated_and_provider_failure_falls_back(self):
+        import io
+        self.projects.settings={'model_upstream':'https://provider.invalid/v1','model':'mundusx-agnostic'}
+        prompt='I want to create an application full enrollment api student course'
+        with patch('usage.Tracker') as tracker, patch('urllib.request.urlopen',return_value=io.BytesIO(json.dumps({'choices':[{'message':{'content':'{"name":"Enrollment API"}'}}]}).encode())) as send:
+            self.assertEqual(suggest_project_name(prompt,self.projects,{'id':'alice'}),'Enrollment API')
+            self.assertEqual(send.call_args.kwargs['timeout'],15)
+            tracker.return_value.finish.assert_called_once_with('completed')
+        with patch('usage.Tracker'),patch('urllib.request.urlopen',side_effect=TimeoutError):
+            self.assertEqual(suggest_project_name(prompt,self.projects,{'id':'alice'}),fallback_project_name(prompt))
+        with patch('usage.Tracker'),patch('urllib.request.urlopen',return_value=io.BytesIO(json.dumps({'choices':[{'message':{'content':'{"name":"../../bad"}'}}]}).encode())):
+            self.assertEqual(suggest_project_name(prompt,self.projects,{'id':'alice'}),fallback_project_name(prompt))
 
     def test_request_retry_is_idempotent(self):
         rid=uuid.uuid4().hex
